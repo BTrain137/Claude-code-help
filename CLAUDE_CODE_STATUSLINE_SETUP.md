@@ -55,28 +55,51 @@ RESET='\033[0m'
 USAGE_DIR="$HOME/.claude/usage"
 mkdir -p "$USAGE_DIR"
 TODAY=$(date +%Y-%m-%d)
+TODAY_UTC=$(date -u +%Y-%m-%d)
 DAILY_FILE="$USAGE_DIR/$TODAY.tsv"
 SESSION_ID="$PPID"
 
-# Update this session's line in the daily file
-session_tokens=$((total_input + total_output))
+# Update this session's cost in the daily file
 if [ -f "$DAILY_FILE" ]; then
-  # Remove existing line for this session, then append updated one
   grep -v "^${SESSION_ID}	" "$DAILY_FILE" > "$DAILY_FILE.tmp" 2>/dev/null || true
   mv "$DAILY_FILE.tmp" "$DAILY_FILE"
 fi
-printf "%s\t%s\t%s\n" "$SESSION_ID" "$session_tokens" "$cost" >> "$DAILY_FILE"
+printf "%s\t%s\t%s\n" "$SESSION_ID" "0" "$cost" >> "$DAILY_FILE"
 
-# Sum all sessions for today
-daily_tokens=0
+# Sum cost across all sessions for today
 daily_cost=0
-while IFS=$'\t' read -r _sid tokens sess_cost; do
-  daily_tokens=$((daily_tokens + tokens))
+while IFS=$'\t' read -r _sid _tokens sess_cost; do
   daily_cost=$(echo "$daily_cost + $sess_cost" | bc)
 done < "$DAILY_FILE"
 
-# Clean up old daily files (keep 7 days)
+# Get actual billed tokens from JSONL (cached 30s for performance)
+# Reads per-API-call tokens instead of context window totals
+TOKENS_CACHE="$USAGE_DIR/.tokens_cache_$TODAY"
+cache_age=999
+[ -f "$TOKENS_CACHE" ] && cache_age=$(( $(date +%s) - $(stat -f %m "$TOKENS_CACHE") ))
+if [ "$cache_age" -ge 30 ]; then
+  daily_tokens=0
+  # JSONL timestamps are UTC, so check both local and UTC date
+  date_pattern="$TODAY"
+  [ "$TODAY" != "$TODAY_UTC" ] && date_pattern="$TODAY\|$TODAY_UTC"
+  while IFS= read -r f; do
+    ft=$(grep "$date_pattern" "$f" 2>/dev/null | jq -r --arg d1 "$TODAY" --arg d2 "$TODAY_UTC" '
+      select(.timestamp and .message.usage and
+        ((.timestamp | startswith($d1)) or (.timestamp | startswith($d2)))) |
+      (.message.usage.input_tokens // 0) + (.message.usage.output_tokens // 0) +
+      (.message.usage.cache_creation_input_tokens // 0) +
+      (.message.usage.cache_read_input_tokens // 0)
+    ' 2>/dev/null | awk '{s+=$1} END {print s+0}')
+    daily_tokens=$((daily_tokens + ${ft:-0}))
+  done < <(find ~/.claude/projects -name "*.jsonl" -mtime -1 2>/dev/null)
+  echo "$daily_tokens" > "$TOKENS_CACHE"
+else
+  daily_tokens=$(cat "$TOKENS_CACHE" 2>/dev/null || echo 0)
+fi
+
+# Clean up old files (keep 7 days)
 find "$USAGE_DIR" -name "*.tsv" -mtime +7 -delete 2>/dev/null
+find "$USAGE_DIR" -name ".tokens_cache_*" -mtime +7 -delete 2>/dev/null
 
 # Format tokens as X.Xk or XXXk
 format_tokens() {
@@ -230,13 +253,30 @@ chmod +x ~/.claude/statusline-command.sh
 
 ## Daily Usage Tracking
 
-Token and cost totals are tracked across all Claude Code sessions per day.
+Cost and token totals are tracked across all Claude Code sessions per day.
 
+### Cost tracking (from session data)
 - **Storage**: `~/.claude/usage/YYYY-MM-DD.tsv` (one file per day)
-- **Format**: Each line is `SESSION_ID<tab>TOKENS<tab>COST`
+- **Format**: Each line is `SESSION_ID<tab>0<tab>COST`
+- **Source**: `cost.total_cost_usd` from Claude Code's live session data (authoritative)
+- **Updates**: Each statusline refresh updates the current session's cost, then sums all sessions
+
+### Token tracking (from JSONL files)
+- **Source**: Per-API-call `message.usage` blocks in `~/.claude/projects/*.jsonl`
+- **Token types counted**: `input_tokens` + `output_tokens` + `cache_creation_input_tokens` + `cache_read_input_tokens`
+- **Cache**: Results cached at `~/.claude/usage/.tokens_cache_YYYY-MM-DD`, refreshes every 30 seconds
+- **Scope**: Only scans JSONL files modified in the last day (`-mtime -1`) for performance
+- **UTC handling**: JSONL timestamps are UTC; the script checks both local and UTC dates to avoid missing entries near midnight
+
+### Why JSONL-based token tracking?
+
+The previous approach summed `context_window.total_input_tokens + total_output_tokens` from session data. These are **cumulative context window totals** that re-count the full conversation history on every turn — inflating the number well beyond actual API consumption.
+
+The current approach reads per-API-call tokens from Claude Code's JSONL log files (`~/.claude/projects/`). Each JSONL entry records the actual tokens consumed by a single API call, which is what Anthropic bills for. This gives an accurate picture of real token usage.
+
+### General
 - **Session ID**: Parent process ID (`$PPID`), unique per Claude Code instance
-- **Updates**: Each statusline refresh updates the current session's line, then sums all sessions
-- **Cleanup**: Daily files older than 7 days are automatically deleted
+- **Cleanup**: TSV and cache files older than 7 days are automatically deleted
 - **Token formatting**: Uses `k` suffix for thousands, `M` suffix for millions (e.g. `850k`, `1.2M`)
 
 ## Features
@@ -245,7 +285,8 @@ Token and cost totals are tracked across all Claude Code sessions per day.
 - Displays zeroed-out stats with empty progress bar on first load
 - Dynamic color coding for context usage (green/yellow/red)
 - Context bracket shows actual window usage (not cumulative session tokens)
-- Daily token and cost totals across all sessions
+- Daily cost totals across all sessions (from Claude's session data)
+- Daily token totals from JSONL per-API-call data (actual billed tokens, cached 30s)
 - Human-readable token formatting (e.g. `93.3k`, `1.2M`)
 - 30-character progress bar with filled/empty block characters
 - Auto-cleanup of usage files older than 7 days
