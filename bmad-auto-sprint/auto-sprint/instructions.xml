@@ -1,0 +1,520 @@
+<workflow>
+  <critical>The workflow execution engine is governed by: {project-root}/_bmad/core/tasks/workflow.xml</critical>
+  <critical>You MUST have already loaded and processed: {installed_path}/workflow.yaml</critical>
+  <critical>Communicate all responses in {communication_language} and language MUST be tailored to {user_skill_level}</critical>
+  <critical>Generate all documents in {document_output_language}</critical>
+
+  <critical>YOU ARE AN AUTONOMOUS SPRINT ORCHESTRATOR - You cycle through stories until scope is complete</critical>
+  <critical>You do NOT implement stories yourself. You spawn sub-agents (Task tool) for each phase.</critical>
+  <critical>Each sub-agent runs in a fresh context to prevent context exhaustion during long sprints.</critical>
+  <critical>You re-read sprint-status.yaml on EVERY iteration - it is the sole source of truth for loop control.</critical>
+  <critical>Quality gates (tsc + tests) run in YOUR context for independent verification, not in sub-agents.</critical>
+  <critical>Circuit breakers are NON-NEGOTIABLE. If max_iterations or max_consecutive_failures is hit, STOP.</critical>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <!-- STEP 1: Load sprint status, validate prerequisites, detect in-flight   -->
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <step n="1" goal="Load sprint status, validate prerequisites, detect in-flight work">
+    <action>Read COMPLETE {{sprint_status}} file from start to end</action>
+
+    <check if="{{sprint_status}} file does NOT exist">
+      <output>HALT: No sprint-status.yaml found at {{sprint_status}}.
+        Run `sprint-planning` first to generate the sprint backlog.</output>
+      <action>HALT - Cannot proceed without sprint status</action>
+    </check>
+
+    <action>Parse ALL development_status entries</action>
+    <action>Categorize every entry:
+      - Epic entries: keys matching "epic-N" pattern
+      - Story entries: keys matching "N-N-name" pattern
+      - Retrospective entries: keys matching "epic-N-retrospective" pattern
+    </action>
+
+    <action>Build sprint snapshot:
+      - Count stories by status: done, review, in-progress, ready-for-dev, backlog
+      - Identify in-flight stories (status = in-progress or review)
+      - Identify the current active epic (first epic with status = in-progress)
+      - Count total epics and their statuses
+    </action>
+
+    <!-- Detect in-flight work that needs attention first -->
+    <check if="any story has status = 'in-progress'">
+      <action>Flag {{in_flight_story}} = first in-progress story key</action>
+      <action>Note: This story will be prioritized in the loop (resume dev)</action>
+    </check>
+
+    <check if="any story has status = 'review'">
+      <action>Flag {{review_pending_story}} = first review story key</action>
+      <action>Note: This story needs code review before new work starts</action>
+    </check>
+
+    <action>Initialize counters:
+      - {{iteration_count}} = 0
+      - {{consecutive_failures}} = 0
+      - {{stories_completed}} = 0
+      - {{stories_failed}} = 0
+      - {{stop_reason}} = ""
+    </action>
+
+    <output>Sprint Status Loaded
+
+      **Sprint Snapshot:**
+      - Done: {{done_count}} stories
+      - Review: {{review_count}} stories
+      - In-Progress: {{in_progress_count}} stories
+      - Ready-for-Dev: {{ready_count}} stories
+      - Backlog: {{backlog_count}} stories
+      - Active Epic: {{active_epic}}
+
+      {{#if in_flight_story}}**In-flight work detected:** {{in_flight_story}} (will resume){{/if}}
+      {{#if review_pending_story}}**Pending review:** {{review_pending_story}} (will review first){{/if}}
+    </output>
+  </step>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <!-- STEP 2: Determine scope, show configuration, get user confirmation     -->
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <step n="2" goal="Determine scope, show configuration, get user confirmation">
+    <!-- Resolve scope -->
+    <check if="{{scope_mode}} == 'epic'">
+      <check if="{{scope_epic_num}} is empty">
+        <action>Auto-detect: use the first epic with status = in-progress</action>
+        <action>If no in-progress epic, use the first epic with status = backlog</action>
+        <action>Store result as {{scope_epic_num}}</action>
+      </check>
+      <action>Count stories in epic {{scope_epic_num}} that are not done</action>
+      <action>Set {{scope_description}} = "Epic {{scope_epic_num}} ({{remaining}} stories remaining)"</action>
+    </check>
+
+    <check if="{{scope_mode}} == 'all'">
+      <action>Count ALL stories across all epics that are not done</action>
+      <action>Set {{scope_description}} = "All epics ({{remaining}} stories remaining across {{epic_count}} epics)"</action>
+    </check>
+
+    <check if="{{scope_mode}} == 'count'">
+      <action>Set {{scope_description}} = "Next {{scope_story_limit}} stories"</action>
+    </check>
+
+    <output>Auto-Sprint Configuration
+
+      **Scope:** {{scope_description}}
+      **Circuit Breakers:** max {{max_iterations}} iterations, stop after {{max_consecutive_failures}} consecutive failures
+      **Story Limit:** {{scope_story_limit}} (0 = unlimited within scope)
+
+      **Execution Plan:**
+      1. Resume any in-flight work (in-progress / review stories)
+      2. For each remaining story: Create Story -> Dev Story -> Quality Gate -> Code Review
+      3. Mark completed stories as done, advance to next
+      4. Stop when scope is exhausted or circuit breaker trips
+
+      **How do you want to run?**
+    </output>
+
+    <ask>Choose execution mode:
+
+      **y** = YOLO mode (fully autonomous, no stops between stories)
+      **c** = Confirm mode (pause for confirmation between each story cycle)
+      **s** = Change scope (modify epic, story count, or mode)
+      **q** = Quit (exit without running)
+
+      Choose [y], [c], [s], or [q]:</ask>
+
+    <check if="user chooses 'q'">
+      <action>Set {{stop_reason}} = "User quit before starting"</action>
+      <goto step="8" />
+    </check>
+
+    <check if="user chooses 's'">
+      <ask>Change scope:
+        1. **epic N** - Focus on epic N only (e.g., "epic 1")
+        2. **all** - Process all remaining stories across all epics
+        3. **count N** - Process next N stories only (e.g., "count 3")
+
+        Enter scope:</ask>
+      <action>Parse user input and update {{scope_mode}}, {{scope_epic_num}}, {{scope_story_limit}}</action>
+      <goto step="2" />
+    </check>
+
+    <check if="user chooses 'y'">
+      <action>Set {{execution_mode}} = "yolo"</action>
+    </check>
+
+    <check if="user chooses 'c'">
+      <action>Set {{execution_mode}} = "confirm"</action>
+    </check>
+
+    <output>Starting auto-sprint in {{execution_mode}} mode...</output>
+  </step>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <!-- STEP 3: LOOP ENTRY - Re-read sprint status, apply circuit breakers,    -->
+  <!--         determine next action by priority                              -->
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <step n="3" goal="LOOP ENTRY: Re-read sprint status, determine next action">
+    <anchor id="loop_entry" />
+
+    <critical>Re-read sprint-status.yaml EVERY iteration - sub-agents may have modified it</critical>
+    <action>Read COMPLETE {{sprint_status}} file</action>
+    <action>Re-parse ALL development_status entries</action>
+    <action>Increment {{iteration_count}} by 1</action>
+
+    <!-- Circuit breaker checks -->
+    <check if="{{iteration_count}} > {{max_iterations}}">
+      <action>Set {{stop_reason}} = "Circuit breaker: max iterations ({{max_iterations}}) reached"</action>
+      <goto step="8" />
+    </check>
+
+    <check if="{{consecutive_failures}} >= {{max_consecutive_failures}}">
+      <action>Set {{stop_reason}} = "Circuit breaker: {{max_consecutive_failures}} consecutive failures"</action>
+      <goto step="8" />
+    </check>
+
+    <!-- Scope exhaustion check -->
+    <check if="{{scope_story_limit}} > 0 AND {{stories_completed}} >= {{scope_story_limit}}">
+      <action>Set {{stop_reason}} = "Scope complete: {{stories_completed}}/{{scope_story_limit}} stories done"</action>
+      <goto step="8" />
+    </check>
+
+    <!-- Filter stories by scope -->
+    <check if="{{scope_mode}} == 'epic'">
+      <action>Only consider stories whose key starts with "{{scope_epic_num}}-"</action>
+    </check>
+
+    <!-- Priority-based next action determination -->
+    <!-- Priority 1: Stories in review need code review -->
+    <check if="any in-scope story has status = 'review'">
+      <action>Set {{current_story}} = first review story key</action>
+      <action>Set {{next_action}} = "code-review"</action>
+      <output>[Iteration {{iteration_count}}] Code review needed: {{current_story}}</output>
+      <goto step="6a" />
+    </check>
+
+    <!-- Priority 2: Stories in-progress need dev continuation -->
+    <check if="any in-scope story has status = 'in-progress'">
+      <action>Set {{current_story}} = first in-progress story key</action>
+      <action>Set {{next_action}} = "dev-story"</action>
+      <output>[Iteration {{iteration_count}}] Resuming development: {{current_story}}</output>
+      <goto step="5" />
+    </check>
+
+    <!-- Priority 3: Stories ready-for-dev need development -->
+    <check if="any in-scope story has status = 'ready-for-dev'">
+      <action>Set {{current_story}} = first ready-for-dev story key</action>
+      <action>Set {{next_action}} = "dev-story"</action>
+      <output>[Iteration {{iteration_count}}] Starting development: {{current_story}}</output>
+      <goto step="5" />
+    </check>
+
+    <!-- Priority 4: Backlog stories need creation first -->
+    <check if="any in-scope story has status = 'backlog'">
+      <action>Set {{current_story}} = first backlog story key</action>
+      <action>Set {{next_action}} = "create-story"</action>
+      <output>[Iteration {{iteration_count}}] Creating story: {{current_story}}</output>
+      <goto step="4" />
+    </check>
+
+    <!-- All done within scope -->
+    <action>Set {{stop_reason}} = "All stories in scope are done"</action>
+    <goto step="7" />
+  </step>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <!-- STEP 4: SUB-AGENT: Create Story (if backlog)                           -->
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <step n="4" goal="SUB-AGENT: Create Story from backlog">
+    <output>[Iteration {{iteration_count}}] Spawning create-story sub-agent for {{current_story}}...</output>
+
+    <action>Spawn a Task agent (subagent_type: "general-purpose") with the following prompt:
+
+      "You are executing the BMAD create-story workflow autonomously.
+
+      CRITICAL STEPS:
+      1. Load the FULL file at {project-root}/_bmad/core/tasks/workflow.xml
+      2. READ its entire contents - this is the CORE OS for EXECUTING the workflow
+      3. Pass the yaml path {project-root}/_bmad/bmm/workflows/4-implementation/create-story/workflow.yaml as 'workflow-config' parameter
+      4. Follow workflow.xml instructions EXACTLY as written
+      5. Save outputs after EACH section
+
+      YOLO MODE: Do NOT ask for user confirmation at any step. Auto-select the next story from sprint-status.yaml. Make all decisions autonomously.
+
+      Target story: {{current_story}}
+
+      When complete, report: SUCCESS or FAILURE with a brief summary."
+    </action>
+
+    <check if="sub-agent reports SUCCESS">
+      <action>Set {{consecutive_failures}} = 0</action>
+      <output>Story created: {{current_story}} (now ready-for-dev)</output>
+      <!-- Loop back to re-read sprint status and pick up the now-ready story -->
+      <goto anchor="loop_entry" />
+    </check>
+
+    <check if="sub-agent reports FAILURE">
+      <action>Increment {{consecutive_failures}} by 1</action>
+      <action>Increment {{stories_failed}} by 1</action>
+      <output>FAILED to create story: {{current_story}} (consecutive failures: {{consecutive_failures}})</output>
+      <goto anchor="loop_entry" />
+    </check>
+  </step>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <!-- STEP 5: SUB-AGENT: Dev Story (if ready-for-dev or in-progress)         -->
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <step n="5" goal="SUB-AGENT: Dev Story implementation">
+    <!-- Confirm mode check -->
+    <check if="{{execution_mode}} == 'confirm'">
+      <ask>[Iteration {{iteration_count}}] About to start development on {{current_story}}.
+
+        Continue? [y]es / [s]kip this story / [q]uit sprint:</ask>
+
+      <check if="user chooses 's'">
+        <output>Skipping {{current_story}}</output>
+        <goto anchor="loop_entry" />
+      </check>
+
+      <check if="user chooses 'q'">
+        <action>Set {{stop_reason}} = "User quit during confirm"</action>
+        <goto step="8" />
+      </check>
+    </check>
+
+    <output>[Iteration {{iteration_count}}] Spawning dev-story sub-agent for {{current_story}}...</output>
+
+    <action>Spawn a Task agent (subagent_type: "general-purpose") with the following prompt:
+
+      "You are executing the BMAD dev-story workflow autonomously.
+
+      CRITICAL STEPS:
+      1. Load the FULL file at {project-root}/_bmad/core/tasks/workflow.xml
+      2. READ its entire contents - this is the CORE OS for EXECUTING the workflow
+      3. Pass the yaml path {project-root}/_bmad/bmm/workflows/4-implementation/dev-story/workflow.yaml as 'workflow-config' parameter
+      4. Follow workflow.xml instructions EXACTLY as written
+      5. Save outputs after EACH section
+
+      YOLO MODE: Do NOT ask for user confirmation at any step. Implement all tasks/subtasks in the story file. Make all decisions autonomously. Do NOT stop at milestones or request review pauses.
+
+      Target story: {{current_story}}
+      Story file should be at: {implementation_artifacts}/{{current_story}}.md
+
+      When complete, report: SUCCESS (story moved to review status) or FAILURE with error details."
+    </action>
+
+    <check if="sub-agent reports SUCCESS">
+      <action>Set {{consecutive_failures}} = 0</action>
+      <output>Dev complete: {{current_story}} (now in review)</output>
+      <!-- Proceed to quality gate before code review -->
+      <goto step="6a" />
+    </check>
+
+    <check if="sub-agent reports FAILURE">
+      <action>Increment {{consecutive_failures}} by 1</action>
+      <action>Increment {{stories_failed}} by 1</action>
+      <output>FAILED dev on: {{current_story}} (consecutive failures: {{consecutive_failures}})</output>
+      <goto anchor="loop_entry" />
+    </check>
+  </step>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <!-- STEP 6a: QUALITY GATE - Independent verification in orchestrator       -->
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <step n="6a" goal="QUALITY GATE: Independent TypeScript build + test verification">
+    <critical>Run these checks in the ORCHESTRATOR context, NOT in a sub-agent</critical>
+    <critical>This provides independent verification that the dev sub-agent's work actually compiles and passes tests</critical>
+
+    <output>[Quality Gate] Running independent verification for {{current_story}}...</output>
+
+    <!-- TypeScript compilation check -->
+    <action>Run: npx tsc --noEmit</action>
+    <check if="tsc fails">
+      <output>QUALITY GATE FAILED: TypeScript compilation errors detected after {{current_story}}</output>
+      <action>Log compilation errors</action>
+      <action>Increment {{consecutive_failures}} by 1</action>
+
+      <check if="{{consecutive_failures}} >= {{max_consecutive_failures}}">
+        <action>Set {{stop_reason}} = "Quality gate failed: TypeScript errors after {{current_story}}"</action>
+        <goto step="8" />
+      </check>
+
+      <!-- Attempt to send back to dev for fixing -->
+      <output>Sending {{current_story}} back to dev for TypeScript fixes...</output>
+      <action>Update sprint-status: {{current_story}} = "in-progress"</action>
+      <goto anchor="loop_entry" />
+    </check>
+
+    <!-- Test suite check -->
+    <action>Run: npm run test:run</action>
+    <check if="tests fail">
+      <output>QUALITY GATE FAILED: Test failures detected after {{current_story}}</output>
+      <action>Log test failures</action>
+      <action>Increment {{consecutive_failures}} by 1</action>
+
+      <check if="{{consecutive_failures}} >= {{max_consecutive_failures}}">
+        <action>Set {{stop_reason}} = "Quality gate failed: test failures after {{current_story}}"</action>
+        <goto step="8" />
+      </check>
+
+      <output>Sending {{current_story}} back to dev for test fixes...</output>
+      <action>Update sprint-status: {{current_story}} = "in-progress"</action>
+      <goto anchor="loop_entry" />
+    </check>
+
+    <action>Set {{consecutive_failures}} = 0</action>
+    <output>[Quality Gate] PASSED - TypeScript compiles, all tests pass</output>
+    <!-- Proceed to code review -->
+    <goto step="6" />
+  </step>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <!-- STEP 6: SUB-AGENT: Code Review                                        -->
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <step n="6" goal="SUB-AGENT: Adversarial code review with auto-fix">
+    <output>[Iteration {{iteration_count}}] Spawning code-review sub-agent for {{current_story}}...</output>
+
+    <action>Spawn a Task agent (subagent_type: "general-purpose") with the following prompt:
+
+      "You are executing the BMAD code-review workflow autonomously.
+
+      CRITICAL STEPS:
+      1. Load the FULL file at {project-root}/_bmad/core/tasks/workflow.xml
+      2. READ its entire contents - this is the CORE OS for EXECUTING the workflow
+      3. Pass the yaml path {project-root}/_bmad/bmm/workflows/4-implementation/code-review/workflow.yaml as 'workflow-config' parameter
+      4. Follow workflow.xml instructions EXACTLY as written
+      5. Save outputs after EACH section
+
+      YOLO MODE: Do NOT ask for user confirmation at any step. When you find issues:
+      - AUTO-FIX all HIGH and MEDIUM issues (choose option 1 automatically)
+      - Do NOT ask the user what to do with findings
+      - Fix the code, update tests, and mark the story accordingly
+
+      Target story: {{current_story}}
+      Story file should be at: {implementation_artifacts}/{{current_story}}.md
+
+      OUTCOME REPORTING - You MUST end your response with exactly ONE of these lines:
+      OUTCOME: DONE - All issues fixed, story marked done
+      OUTCOME: NEEDS_REWORK - Issues found that require re-development
+      OUTCOME: FAILURE - Unable to complete review or critical blockers found"
+    </action>
+
+    <check if="sub-agent outcome == DONE">
+      <action>Set {{consecutive_failures}} = 0</action>
+      <action>Increment {{stories_completed}} by 1</action>
+      <output>STORY COMPLETE: {{current_story}} ({{stories_completed}} total completed this session)</output>
+      <!-- Check if this completes an epic -->
+      <goto step="7" />
+    </check>
+
+    <check if="sub-agent outcome == NEEDS_REWORK">
+      <action>Set {{consecutive_failures}} = 0</action>
+      <output>{{current_story}} needs rework after review - looping back to dev</output>
+      <!-- Story should now be in-progress, loop will pick it up for dev -->
+      <goto anchor="loop_entry" />
+    </check>
+
+    <check if="sub-agent outcome == FAILURE">
+      <action>Increment {{consecutive_failures}} by 1</action>
+      <action>Increment {{stories_failed}} by 1</action>
+      <output>FAILED code review: {{current_story}} (consecutive failures: {{consecutive_failures}})</output>
+      <goto anchor="loop_entry" />
+    </check>
+  </step>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <!-- STEP 7: Check epic completion, optionally advance to next epic         -->
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <step n="7" goal="Check epic completion, advance if needed">
+    <action>Re-read {{sprint_status}} to get latest state</action>
+
+    <!-- Determine which epic the completed story belongs to -->
+    <action>Extract epic number from {{current_story}} key (first digit before the dash)</action>
+    <action>Set {{completed_epic_num}} = extracted epic number</action>
+
+    <!-- Check if all stories in that epic are done -->
+    <action>Find ALL story keys starting with "{{completed_epic_num}}-"</action>
+    <action>Check if ALL of them have status = "done"</action>
+
+    <check if="all stories in epic {{completed_epic_num}} are done">
+      <action>Update sprint-status: epic-{{completed_epic_num}} = "done"</action>
+      <output>EPIC {{completed_epic_num}} COMPLETE! All stories done.</output>
+
+      <!-- If scope is epic-specific, we're done -->
+      <check if="{{scope_mode}} == 'epic' AND {{scope_epic_num}} == {{completed_epic_num}}">
+        <action>Set {{stop_reason}} = "Epic {{completed_epic_num}} fully completed"</action>
+        <goto step="8" />
+      </check>
+
+      <!-- For all/count mode, find next epic and continue -->
+      <check if="{{scope_mode}} == 'all' OR {{scope_mode}} == 'count'">
+        <action>Find next epic with status != done</action>
+        <check if="next epic exists">
+          <action>Update next epic status to "in-progress" if currently "backlog"</action>
+          <output>Advancing to next epic: epic-{{next_epic_num}}</output>
+        </check>
+        <check if="no more epics with non-done status">
+          <action>Set {{stop_reason}} = "All epics in scope completed"</action>
+          <goto step="8" />
+        </check>
+      </check>
+    </check>
+
+    <check if="NOT all stories in epic {{completed_epic_num}} are done">
+      <output>Epic {{completed_epic_num}} still has remaining stories</output>
+    </check>
+
+    <!-- Continue the loop -->
+    <goto anchor="loop_entry" />
+  </step>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <!-- STEP 8: Session summary                                                -->
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <step n="8" goal="Session summary and session log">
+    <action>Re-read {{sprint_status}} for final snapshot</action>
+
+    <output>Auto-Sprint Session Complete
+
+      **Stop Reason:** {{stop_reason}}
+      **Iterations:** {{iteration_count}}
+      **Stories Completed:** {{stories_completed}}
+      **Stories Failed:** {{stories_failed}}
+      **Execution Mode:** {{execution_mode}}
+
+      **Sprint Status After Session:**
+      - Done: {{final_done_count}} stories
+      - Review: {{final_review_count}} stories
+      - In-Progress: {{final_in_progress_count}} stories
+      - Ready-for-Dev: {{final_ready_count}} stories
+      - Backlog: {{final_backlog_count}} stories
+
+      {{#if stories_failed > 0}}
+      **Failed Stories:**
+      {{failed_story_list}}
+      {{/if}}
+
+      **Next Steps:**
+      {{#if stop_reason contains "circuit breaker"}}
+      - Investigate failures before re-running auto-sprint
+      - Check the failed story files for error details
+      {{/if}}
+      {{#if stop_reason contains "completed"}}
+      - Run retrospective for completed epic(s)
+      - Review sprint-status.yaml for overall progress
+      {{/if}}
+      {{#if stop_reason contains "User quit"}}
+      - Re-run /bmad-bmm-auto-sprint to resume where you left off
+      {{/if}}
+    </output>
+
+    <!-- Write session log -->
+    <action>Write session log to {{session_log}} with:
+      - Date and time
+      - Configuration used (scope, mode, circuit breakers)
+      - Iteration-by-iteration summary
+      - Stories completed and failed
+      - Stop reason
+      - Sprint status snapshot
+    </action>
+
+    <output>Session log saved to: {{session_log}}</output>
+  </step>
+
+</workflow>
