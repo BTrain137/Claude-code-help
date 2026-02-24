@@ -1,2 +1,4 @@
 # Don't index SpecStory auto-save files, but allow explicit context inclusion via @ references
 .specstory/**
+# SpecStory derived-cursor-rules.mdc backup files
+.specstory/ai_rules_backups/*
