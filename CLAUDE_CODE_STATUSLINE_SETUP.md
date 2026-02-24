@@ -403,8 +403,8 @@ This script is self-contained. It renders the project banner, then all the stand
 input=$(cat)
 
 # --- Banner config (defaults, overridden by statusline.conf if present) ---
-BANNER_TITLE="My Project"
-BANNER_COLOR=135   # purple
+BANNER_TITLE="My Project"   # default (overridden by statusline.conf)
+BANNER_COLOR=135             # default (overridden by statusline.conf)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF_FILE="${SCRIPT_DIR}/statusline.conf"
