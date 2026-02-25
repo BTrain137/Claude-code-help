@@ -26,13 +26,14 @@ variables:
 
   # Scope control - determines how many stories to process
   # Modes: "epic" (single epic), "all" (all epics), "count" (next N stories)
-  scope_mode: "epic"
+  scope_mode: "all"
   scope_epic_num: "" # Auto-detected from sprint-status if empty; used when scope_mode=epic
   scope_story_limit: 0 # 0 = unlimited within scope; >0 = stop after N stories completed
 
   # Circuit breakers - prevent runaway execution
-  max_iterations: 20 # Absolute cap on loop iterations (create + dev + review each count as 1)
-  max_consecutive_failures: 2 # Stop after N consecutive failures (failed dev or failed review)
+  # For overnight runs: stories × ~3 iterations each, plus rework buffer
+  max_iterations: 80 # Absolute cap on loop iterations (create + dev + review each count as 1)
+  max_consecutive_failures: 3 # Stop after N consecutive failures (failed dev or failed review)
 
   # Ralph-loop style persistent learnings — append-only context across stories/epics
   learnings_file: "{implementation_artifacts}/sprint-learnings.md"

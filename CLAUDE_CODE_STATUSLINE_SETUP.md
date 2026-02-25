@@ -65,7 +65,8 @@ USAGE_DIR="$HOME/.claude/usage"
 mkdir -p "$USAGE_DIR"
 TODAY=$(date +%Y-%m-%d)
 DAILY_FILE="$USAGE_DIR/$TODAY.tsv"
-SESSION_ID="$PPID"
+SESSION_ID=$(echo "$input" | jq -r '.session_id // empty')
+[ -z "$SESSION_ID" ] && SESSION_ID="$PPID"  # fallback
 
 # Update this session's line in the daily file (cost-based tracking)
 session_tokens=$((total_input + total_output))
@@ -308,7 +309,7 @@ The previous approach summed `context_window.total_input_tokens + total_output_t
 The current approach reads per-API-call tokens from Claude Code's JSONL log files (`~/.claude/projects/`). Each JSONL entry records the actual tokens consumed by a single API call, which is what Anthropic bills for. This gives an accurate picture of real token usage.
 
 ### General
-- **Session ID**: Parent process ID (`$PPID`), unique per Claude Code instance
+- **Session ID**: Uses `session_id` from Claude Code's statusline JSON (stable per session), with `$PPID` fallback
 - **Cleanup**: TSV files older than 7 days are automatically deleted
 - **Token formatting**: Uses `k` suffix for thousands, `M` suffix for millions (e.g. `850k`, `1.2M`)
 
@@ -449,7 +450,8 @@ USAGE_DIR="$HOME/.claude/usage"
 mkdir -p "$USAGE_DIR"
 TODAY=$(date +%Y-%m-%d)
 DAILY_FILE="$USAGE_DIR/$TODAY.tsv"
-SESSION_ID="$PPID"
+SESSION_ID=$(echo "$input" | jq -r '.session_id // empty')
+[ -z "$SESSION_ID" ] && SESSION_ID="$PPID"  # fallback
 
 session_tokens=$((total_input + total_output))
 if [ -f "$DAILY_FILE" ]; then
