@@ -34,6 +34,10 @@ variables:
   max_iterations: 20 # Absolute cap on loop iterations (create + dev + review each count as 1)
   max_consecutive_failures: 2 # Stop after N consecutive failures (failed dev or failed review)
 
+  # Ralph-loop style persistent learnings — append-only context across stories/epics
+  learnings_file: "{implementation_artifacts}/sprint-learnings.md"
+  retros_completed: 0
+
   # Session log
   session_log: "{implementation_artifacts}/auto-sprint-log-{{date}}.md"
 
@@ -48,3 +52,5 @@ sub_workflows:
   code_review:
     command: "{project-root}/.library/commands/bmad/bmad-bmm-code-review.md"
     workflow: "{project-root}/_bmad/bmm/workflows/4-implementation/code-review/workflow.yaml"
+  retrospective:
+    workflow: "{project-root}/_bmad/bmm/workflows/4-implementation/retrospective/workflow.yaml"

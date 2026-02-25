@@ -1,28 +1,42 @@
 # BMAD Auto-Sprint Workflow
 
-An autonomous sprint loop that cycles through the BMAD story lifecycle — **Create Story → Dev Story → Quality Gate → Code Review** — until the sprint scope is complete. Ralph-style YOLO execution with circuit breakers and quality gates.
+An autonomous sprint loop that cycles through the BMAD story lifecycle — **Create Story → Dev Story → Quality Gate → Code Review** — until the sprint scope is complete. Ralph-style YOLO execution with circuit breakers, quality gates, auto-retrospectives, and persistent learnings.
 
 ## How It Works
 
 The auto-sprint is a **meta-orchestrator** that spawns sub-agents for each phase:
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    AUTO-SPRINT LOOP                         │
-│                                                             │
-│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌────────┐  │
-│  │ Create   │──▶│ Dev      │──▶│ Quality  │──▶│ Code   │  │
-│  │ Story    │   │ Story    │   │ Gate     │   │ Review │  │
-│  │(sub-agent)  │(sub-agent)  │(orchestrator) │(sub-agent) │
-│  └──────────┘   └──────────┘   └──────────┘   └────────┘  │
-│       ▲              ▲                              │       │
-│       │              │         NEEDS_REWORK ───────┘       │
-│       │              └──────── (loop back to dev)          │
-│       │                                                     │
-│       └──── next story ◀──── DONE ──────────────────┘      │
-│                                                             │
-│  Circuit Breakers: max 20 iterations, 2 consecutive fails  │
-└─────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                      AUTO-SPRINT LOOP                            │
+│                                                                  │
+│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌────────┐         │
+│  │ Create   │──▶│ Dev      │──▶│ Quality  │──▶│ Code   │         │
+│  │ Story    │   │ Story    │   │ Gate     │   │ Review │         │
+│  │(sub-agent)  │(sub-agent)  │(orchestrator) │(sub-agent)        │
+│  └──────────┘   └──────────┘   └──────────┘   └────────┘         │
+│       ▲              ▲                              │            │
+│       │              │         NEEDS_REWORK ───────┘             │
+│       │              └──────── (loop back to dev)                │
+│       │                                                          │
+│       └──── next story ◀──── DONE ──────────────────┘            │
+│                                        │                         │
+│                              [All stories in epic done?]         │
+│                                 NO → next story                  │
+│                                YES ↓                             │
+│                            ┌────────────┐                        │
+│                            │   RETRO    │  (Step 7a)             │
+│                            │(sub-agent) │                        │
+│                            └────────────┘                        │
+│                                  │                               │
+│                            ┌────────────┐                        │
+│                            │ TRANSITION │  (Step 7b)             │
+│                            │ next epic  │                        │
+│                            └────────────┘                        │
+│                                                                  │
+│  Circuit Breakers: max 20 iterations, 2 consecutive fails        │
+│  Persistent Learnings: sprint-learnings.md (ralph-loop style)    │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ### Key Design Decisions
@@ -37,6 +51,10 @@ The auto-sprint is a **meta-orchestrator** that spawns sub-agents for each phase
 
 5. **Scope control** — Three modes: `epic` (single epic), `all` (all epics), `count` (next N stories).
 
+6. **Auto-retrospectives** — When an epic completes, a retrospective sub-agent runs automatically (YOLO) or with user confirmation (confirm mode). Retro failure is non-blocking and does not trip circuit breakers.
+
+7. **Persistent learnings (ralph-loop style)** — An append-only `sprint-learnings.md` file accumulates structured insights from every sub-agent. Each story phase appends "what worked / what to avoid / pattern insight" entries. Epic retros append carry-forward summaries. Sub-agents read this file before starting work for cross-story context.
+
 ### Execution Modes
 
 When launched, the orchestrator presents a scope configuration and asks:
@@ -49,7 +67,7 @@ When launched, the orchestrator presents a scope configuration and asks:
 ## Prerequisites
 
 - BMAD framework installed in project (`_bmad/` directory)
-- Existing workflows: `create-story`, `dev-story`, `code-review`
+- Existing workflows: `create-story`, `dev-story`, `code-review`, `retrospective`
 - A `sprint-status.yaml` file (generated by `sprint-planning` workflow)
 
 ## Installation
@@ -101,6 +119,27 @@ scope_story_limit: 1  # Process only 1 story
 ```yaml
 max_iterations: 20          # Absolute cap
 max_consecutive_failures: 2  # Stop after N failures in a row
+```
+
+## Learnings File
+
+The auto-sprint creates and maintains `sprint-learnings.md` in your implementation artifacts directory. This is a ralph-loop inspired append-only file that sub-agents read for context and write to after each phase:
+
+```markdown
+# Sprint Learnings
+<!-- Append-only. Sub-agents read for context, append after each story/epic. -->
+
+---
+## 1-1-initial-setup (dev-story) - 2026-02-24
+- **What worked:** Clean scaffolding, test framework wired correctly
+- **What to avoid:** Don't skip tsconfig strict mode
+- **Pattern/insight:** Set up linting before first story
+
+---
+## Epic 1 Retrospective - 2026-02-24
+- **Epic-level wins:** Foundation solid, test coverage >85%
+- **Epic-level improvements needed:** Story sizing too optimistic
+- **Carry-forward for next epic:** Screen capture APIs need entitlements
 ```
 
 ## File Structure

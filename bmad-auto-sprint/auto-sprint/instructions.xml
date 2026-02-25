@@ -53,7 +53,15 @@
       - {{consecutive_failures}} = 0
       - {{stories_completed}} = 0
       - {{stories_failed}} = 0
+      - {{retros_completed}} = 0
       - {{stop_reason}} = ""
+    </action>
+
+    <action>Initialize learnings file:
+      - Check if {{learnings_file}} exists
+      - If NOT: create it with header:
+        "# Sprint Learnings\n&lt;!-- Append-only. Sub-agents read for context, append after each story/epic. --&gt;\n"
+      - If YES: read its contents and store as {{learnings_context}}
     </action>
 
     <output>Sprint Status Loaded
@@ -239,6 +247,15 @@
 
       Target story: {{current_story}}
 
+      LEARNINGS INTEGRATION:
+      - Before starting work, read the learnings file at {{learnings_file}} for context from prior stories.
+      - After completing your work, append a structured entry to {{learnings_file}} in this format:
+        ---
+        ## {{current_story}} (create-story) - {{date}}
+        - **What worked:** [brief note]
+        - **What to avoid:** [brief note]
+        - **Pattern/insight:** [brief note]
+
       When complete, report: SUCCESS or FAILURE with a brief summary."
     </action>
 
@@ -295,6 +312,15 @@
 
       Target story: {{current_story}}
       Story file should be at: {implementation_artifacts}/{{current_story}}.md
+
+      LEARNINGS INTEGRATION:
+      - Before starting work, read the learnings file at {{learnings_file}} for context from prior stories.
+      - After completing your work, append a structured entry to {{learnings_file}} in this format:
+        ---
+        ## {{current_story}} (dev-story) - {{date}}
+        - **What worked:** [brief note]
+        - **What to avoid:** [brief note]
+        - **Pattern/insight:** [brief note]
 
       When complete, report: SUCCESS (story moved to review status) or FAILURE with error details."
     </action>
@@ -389,6 +415,15 @@
       Target story: {{current_story}}
       Story file should be at: {implementation_artifacts}/{{current_story}}.md
 
+      LEARNINGS INTEGRATION:
+      - Before starting work, read the learnings file at {{learnings_file}} for context from prior stories.
+      - After completing your work, append a structured entry to {{learnings_file}} in this format:
+        ---
+        ## {{current_story}} (code-review) - {{date}}
+        - **What worked:** [brief note]
+        - **What to avoid:** [brief note]
+        - **Pattern/insight:** [brief note]
+
       OUTCOME REPORTING - You MUST end your response with exactly ONE of these lines:
       OUTCOME: DONE - All issues fixed, story marked done
       OUTCOME: NEEDS_REWORK - Issues found that require re-development
@@ -398,6 +433,8 @@
     <check if="sub-agent outcome == DONE">
       <action>Set {{consecutive_failures}} = 0</action>
       <action>Increment {{stories_completed}} by 1</action>
+      <action>Re-read {{learnings_file}} to capture new entries from code-review sub-agent</action>
+      <action>Store updated contents as {{learnings_context}}</action>
       <output>STORY COMPLETE: {{current_story}} ({{stories_completed}} total completed this session)</output>
       <!-- Check if this completes an epic -->
       <goto step="7" />
@@ -419,9 +456,9 @@
   </step>
 
   <!-- ════════════════════════════════════════════════════════════════════════ -->
-  <!-- STEP 7: Check epic completion, optionally advance to next epic         -->
+  <!-- STEP 7: Check epic completion, trigger retro if epic done              -->
   <!-- ════════════════════════════════════════════════════════════════════════ -->
-  <step n="7" goal="Check epic completion, advance if needed">
+  <step n="7" goal="Check epic completion, trigger retro if epic done">
     <action>Re-read {{sprint_status}} to get latest state</action>
 
     <!-- Determine which epic the completed story belongs to -->
@@ -432,36 +469,118 @@
     <action>Find ALL story keys starting with "{{completed_epic_num}}-"</action>
     <action>Check if ALL of them have status = "done"</action>
 
-    <check if="all stories in epic {{completed_epic_num}} are done">
-      <action>Update sprint-status: epic-{{completed_epic_num}} = "done"</action>
-      <output>EPIC {{completed_epic_num}} COMPLETE! All stories done.</output>
+    <check if="NOT all stories in epic {{completed_epic_num}} are done">
+      <output>Epic {{completed_epic_num}} still has remaining stories</output>
+      <goto anchor="loop_entry" />
+    </check>
 
-      <!-- If scope is epic-specific, we're done -->
-      <check if="{{scope_mode}} == 'epic' AND {{scope_epic_num}} == {{completed_epic_num}}">
-        <action>Set {{stop_reason}} = "Epic {{completed_epic_num}} fully completed"</action>
+    <!-- Epic is complete! -->
+    <action>Update sprint-status: epic-{{completed_epic_num}} = "done"</action>
+    <output>EPIC {{completed_epic_num}} COMPLETE! All stories done.</output>
+
+    <!-- In confirm mode, ask user about retro -->
+    <check if="{{execution_mode}} == 'confirm'">
+      <ask>Epic {{completed_epic_num}} is done. Run retrospective?
+
+        **y** = Run retro now
+        **s** = Skip retro, continue to next epic
+        **q** = Quit sprint
+
+        Choose [y], [s], or [q]:</ask>
+
+      <check if="user chooses 'q'">
+        <action>Set {{stop_reason}} = "User quit after epic completion"</action>
         <goto step="8" />
       </check>
 
-      <!-- For all/count mode, find next epic and continue -->
-      <check if="{{scope_mode}} == 'all' OR {{scope_mode}} == 'count'">
-        <action>Find next epic with status != done</action>
-        <check if="next epic exists">
-          <action>Update next epic status to "in-progress" if currently "backlog"</action>
-          <output>Advancing to next epic: epic-{{next_epic_num}}</output>
-        </check>
-        <check if="no more epics with non-done status">
-          <action>Set {{stop_reason}} = "All epics in scope completed"</action>
-          <goto step="8" />
-        </check>
+      <check if="user chooses 's'">
+        <goto step="7b" />
       </check>
     </check>
 
-    <check if="NOT all stories in epic {{completed_epic_num}} are done">
-      <output>Epic {{completed_epic_num}} still has remaining stories</output>
+    <!-- YOLO mode or user chose 'y' — run retro -->
+    <goto step="7a" />
+  </step>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <!-- STEP 7a: SUB-AGENT: Retrospective for completed epic                  -->
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <step n="7a" goal="SUB-AGENT: Run retrospective for completed epic">
+    <output>[Retro] Spawning retrospective sub-agent for Epic {{completed_epic_num}}...</output>
+
+    <action>Spawn a Task agent (subagent_type: "general-purpose") with the following prompt:
+
+      "You are executing the BMAD retrospective workflow autonomously.
+
+      CRITICAL STEPS:
+      1. Load the FULL file at {project-root}/_bmad/core/tasks/workflow.xml
+      2. READ its entire contents - this is the CORE OS for EXECUTING the workflow
+      3. Pass the yaml path {project-root}/_bmad/bmm/workflows/4-implementation/retrospective/workflow.yaml as 'workflow-config' parameter
+      4. Follow workflow.xml instructions EXACTLY as written
+      5. Save outputs after EACH section
+
+      FULLY AUTONOMOUS — ZERO USER INTERACTION:
+      This is running as a sub-agent inside an overnight auto-sprint. There is NO user present.
+      - Do NOT use AskUserQuestion or any interactive tool. NEVER wait for user input.
+      - Every 'WAIT for {user_name}' directive in the retro instructions must be AUTO-SIMULATED — generate a plausible {user_name} response and continue immediately.
+      - Every '<ask>' or confirmation prompt must be auto-answered with the most reasonable choice (typically 'yes' / proceed).
+      - All decisions are yours to make autonomously. If unsure, choose the conservative option and move on.
+
+      EPIC OVERRIDE: The epic to retrospect is Epic {{completed_epic_num}}. Skip all epic discovery/selection logic (Step 1 of the retro) — set {{epic_number}} = {{completed_epic_num}} directly.
+      PARTY MODE: Simulate the Party Mode discussion autonomously — generate perspectives from all team roles AND simulate {user_name}'s responses. Do NOT pause for real user input at any point.
+
+      LEARNINGS INTEGRATION:
+      - Read the learnings file at {{learnings_file}} to see story-level entries for this epic.
+      - After completing the retrospective, append an epic-level summary to {{learnings_file}} in this format:
+        ---
+        ## Epic {{completed_epic_num}} Retrospective - {{date}}
+        - **Epic-level wins:** [summary]
+        - **Epic-level improvements needed:** [summary]
+        - **Carry-forward for next epic:** [key insights]
+
+      When complete, report: SUCCESS or FAILURE with a brief summary."
+    </action>
+
+    <check if="sub-agent reports SUCCESS">
+      <action>Increment {{retros_completed}} by 1</action>
+      <output>[Retro] Epic {{completed_epic_num}} retrospective completed successfully.</output>
+      <goto step="7b" />
     </check>
 
-    <!-- Continue the loop -->
-    <goto anchor="loop_entry" />
+    <check if="sub-agent reports FAILURE">
+      <critical>Retro failure is NON-BLOCKING — do NOT increment {{consecutive_failures}}</critical>
+      <output>[Retro] WARNING: Retrospective for Epic {{completed_epic_num}} failed. Continuing sprint...</output>
+      <goto step="7b" />
+    </check>
+  </step>
+
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <!-- STEP 7b: Epic transition — decide whether to continue or stop          -->
+  <!-- ════════════════════════════════════════════════════════════════════════ -->
+  <step n="7b" goal="Epic transition — decide whether to continue or stop">
+    <!-- If scope is epic-specific, we're done -->
+    <check if="{{scope_mode}} == 'epic' AND {{scope_epic_num}} == {{completed_epic_num}}">
+      <action>Set {{stop_reason}} = "Epic {{completed_epic_num}} fully completed (with retro)"</action>
+      <goto step="8" />
+    </check>
+
+    <!-- For all/count mode, find next epic and continue -->
+    <check if="{{scope_mode}} == 'all' OR {{scope_mode}} == 'count'">
+      <action>Re-read {{sprint_status}} to find next epic with status != done</action>
+
+      <check if="no more epics with status != done">
+        <action>Set {{stop_reason}} = "All epics in scope completed"</action>
+        <goto step="8" />
+      </check>
+
+      <action>Set {{scope_epic_num}} to next epic number</action>
+      <action>Update next epic status to "in-progress" if currently "backlog"</action>
+      <output>Advancing to Epic {{scope_epic_num}}...</output>
+      <goto anchor="loop_entry" />
+    </check>
+
+    <action>Set {{stop_reason}} = "All epics in scope completed"</action>
+    <goto step="8" />
   </step>
 
   <!-- ════════════════════════════════════════════════════════════════════════ -->
@@ -470,13 +589,20 @@
   <step n="8" goal="Session summary and session log">
     <action>Re-read {{sprint_status}} for final snapshot</action>
 
+    <action>Count the number of story-level and epic-level entries in {{learnings_file}} and store as {{learnings_entry_count}}</action>
+
     <output>Auto-Sprint Session Complete
 
       **Stop Reason:** {{stop_reason}}
       **Iterations:** {{iteration_count}}
       **Stories Completed:** {{stories_completed}}
       **Stories Failed:** {{stories_failed}}
+      **Retros Completed:** {{retros_completed}}
       **Execution Mode:** {{execution_mode}}
+
+      **Learnings:**
+      - File: {{learnings_file}}
+      - Entries: {{learnings_entry_count}}
 
       **Sprint Status After Session:**
       - Done: {{final_done_count}} stories
@@ -496,8 +622,8 @@
       - Check the failed story files for error details
       {{/if}}
       {{#if stop_reason contains "completed"}}
-      - Run retrospective for completed epic(s)
       - Review sprint-status.yaml for overall progress
+      - Check sprint-learnings.md for accumulated insights
       {{/if}}
       {{#if stop_reason contains "User quit"}}
       - Re-run /bmad-bmm-auto-sprint to resume where you left off
