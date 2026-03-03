@@ -644,3 +644,114 @@ Full 256-color chart: https://www.ditig.com/256-colors-cheat-sheet
 - The global script delegates via `exec`, which replaces itself entirely. Only one script ever produces output, so duplication is impossible.
 - No machine-specific paths in the project repo. Safe to commit and share with teammates.
 - Teammates without the global delegation script are unaffected — the project files are inert for them.
+
+### Advanced: Multi-Color Banner Bars
+
+Instead of a single solid color for the `████` bars, you can cycle through multiple colors to create a gradient effect. This is purely cosmetic — everything else works the same.
+
+#### What it looks like
+
+Solid (default):
+```
+████████████████████ My Project ████████████████████
+```
+All blocks use one color.
+
+Multi-color:
+```
+████████████████████ Design2Liquid ████████████████████
+ ^^^^ ^^^^ ^^^^ ^^^^               ^^^^ ^^^^ ^^^^ ^^^^
+ 208  203   43  203  208           208  203   43  203  208
+```
+Each 4-block segment uses a different color from the palette, creating a gradient feel.
+
+#### Step 1: Update `statusline.conf`
+
+Add two new variables alongside the existing ones:
+
+```bash
+# statusline.conf — per-project banner configuration
+# Sourced by .claude/statusline-command.sh at render time.
+# Changes take effect immediately; no restart needed.
+
+BANNER_TITLE="Design2Liquid"
+
+# BANNER_STYLE: "solid" (default) or "multicolor"
+BANNER_STYLE="multicolor"
+
+# BANNER_COLOR: used when BANNER_STYLE="solid" (single 256-color number)
+BANNER_COLOR=208
+
+# BANNER_COLORS: used when BANNER_STYLE="multicolor"
+# Space-separated list of 256-color numbers. Each number colors one 4-block
+# segment. The bars on each side mirror this sequence, so colors read
+# symmetrically: left edge → center → title → center → right edge.
+#
+# Tip: use 3-5 colors. Fewer feels bold, more feels busy.
+BANNER_COLORS="208 203 43 203 208"
+
+# BANNER_SEGMENT_LEN: blocks per color segment (default 4)
+# Increase for wider bars, decrease for tighter color transitions.
+BANNER_SEGMENT_LEN=4
+```
+
+#### Step 2: Replace the banner rendering block
+
+In your project's `.claude/statusline-command.sh`, replace the banner section (the `# --- Project banner ---` block) with this version that handles both styles:
+
+```bash
+# --- Project banner ---
+if [ "${BANNER_STYLE:-solid}" = "multicolor" ]; then
+  # Multi-color: each segment gets its own 256-color
+  IFS=' ' read -ra COLORS <<< "${BANNER_COLORS:-208 203 43 203 208}"
+  SEG_LEN="${BANNER_SEGMENT_LEN:-4}"
+  SEGMENT=$(printf "%${SEG_LEN}s" | tr ' ' '█')
+
+  LEFT_BAR=""
+  RIGHT_BAR=""
+  for c in "${COLORS[@]}"; do
+    LEFT_BAR="${LEFT_BAR}\033[38;5;${c}m${SEGMENT}"
+    RIGHT_BAR="${RIGHT_BAR}\033[38;5;${c}m${SEGMENT}"
+  done
+
+  # Title text — cycle through the same colors per character
+  TITLE_OUT=""
+  title_len=${#BANNER_TITLE}
+  num_colors=${#COLORS[@]}
+  for (( i=0; i<title_len; i++ )); do
+    char="${BANNER_TITLE:$i:1}"
+    ci=$(( i % num_colors ))
+    TITLE_OUT="${TITLE_OUT}\033[38;5;${COLORS[$ci]}m${char}"
+  done
+
+  printf "${LEFT_BAR}\033[0m ${TITLE_OUT}\033[0m ${RIGHT_BAR}\033[0m\n"
+else
+  # Solid: single color for bars, white title on colored background
+  BANNER_FG="\033[38;5;${BANNER_COLOR}m"
+  BANNER_BG="\033[48;5;${BANNER_COLOR}m"
+  PAD_LEN=20
+  LEFT_PAD=$(printf "%${PAD_LEN}s" | tr ' ' '█')
+  RIGHT_PAD=$(printf "%${PAD_LEN}s" | tr ' ' '█')
+  printf "${BANNER_FG}${LEFT_PAD}${BANNER_BG}${WHITE}${BOLD} ${BANNER_TITLE} ${RESET}${BANNER_FG}${RIGHT_PAD}${RESET}\n"
+fi
+```
+
+#### Example color schemes
+
+| Theme | `BANNER_COLORS` | Effect |
+|-------|-----------------|--------|
+| Sunset | `"196 208 220 208 196"` | Red → Orange → Gold → Orange → Red |
+| Ocean | `"27 39 51 39 27"` | Blue → Bright Blue → Cyan → Bright Blue → Blue |
+| Forest | `"22 34 46 34 22"` | Dark Green → Green → Bright Green → Green → Dark Green |
+| Vaporwave | `"201 135 51 135 201"` | Magenta → Purple → Cyan → Purple → Magenta |
+| Fire | `"196 208 220 208 196"` | Red → Orange → Gold → Orange → Red |
+| Mono | `"240 245 255 245 240"` | Grey → Light Grey → White → Light Grey → Grey |
+
+#### Tips
+
+- Use an **odd number** of colors for natural symmetry (the middle color sits at the center of each bar, flanking the title).
+- `BANNER_SEGMENT_LEN=2` with more colors creates a tighter gradient. `BANNER_SEGMENT_LEN=6` with fewer colors creates wide bold stripes.
+- The title text cycles through the same `BANNER_COLORS` array per character. For a plain white title instead, replace the title loop with:
+  ```bash
+  TITLE_OUT="\033[1;97m${BANNER_TITLE}"
+  ```
