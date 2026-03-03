@@ -9,6 +9,8 @@ Quick reference for setting up Claude Code on a new machine.
 
 ## 1. Create `~/.claude/settings.json`
 
+Add the statusline command to your global settings:
+
 ```json
 {
   "statusLine": {
@@ -17,6 +19,8 @@ Quick reference for setting up Claude Code on a new machine.
   }
 }
 ```
+
+> **Note:** This is the global default. Per-project overrides happen via the delegation block in the global script (see Section 4), not by adding `statusLine` to project settings. The global script auto-detects project-level scripts and hands off to them.
 
 ## 2. Create `~/.claude/statusline-command.sh`
 
@@ -326,9 +330,9 @@ The current approach reads per-API-call tokens from Claude Code's JSONL log file
 - Auto-cleanup of usage files older than 7 days
 - Per-project banner overrides via project-level `.claude/statusline-command.sh`
 
-## 4. Per-Project Statusline Override (Optional)
+## 4. Per-Project Statusline Override
 
-You can add a colored project banner above the standard statusline on a per-project basis. This makes it easy to identify which project you're working in at a glance.
+Every project can have its own statusline with a custom banner, colors, and configuration. This is the recommended approach for distinguishing projects at a glance. The global script auto-delegates to project-level scripts — no manual wiring needed.
 
 ### How it works
 
@@ -397,6 +401,7 @@ This script is self-contained. It renders the project banner, then all the stand
 # Edit .claude/statusline.conf (in the same directory as this script) to change
 # the banner title and color without touching this file.  Available keys:
 #
+#   BANNER_STYLE="solid"        # "solid", "multicolor", or "box"
 #   BANNER_TITLE="My Project"   # text shown in the centre of the banner
 #   BANNER_COLOR=135            # 256-color palette number (0-255) for fg + bg
 
@@ -404,8 +409,15 @@ This script is self-contained. It renders the project banner, then all the stand
 input=$(cat)
 
 # --- Banner config (defaults, overridden by statusline.conf if present) ---
+BANNER_STYLE="solid"         # "solid", "multicolor", or "box"
 BANNER_TITLE="My Project"   # default (overridden by statusline.conf)
 BANNER_COLOR=135             # default (overridden by statusline.conf)
+BANNER_COLORS=""             # for multicolor style
+BANNER_SEGMENT_LEN=4         # for multicolor style
+BANNER_SUBTITLE=""           # for box style
+BOX_COLOR=218                # for box style
+TITLE_COLORS=""              # for box style
+SUBTITLE_COLORS=""           # for box style
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF_FILE="${SCRIPT_DIR}/statusline.conf"
@@ -435,15 +447,67 @@ DIM_WHITE='\033[2;37m'
 BOLD='\033[1m'
 RESET='\033[0m'
 
-# Build banner escape codes from the configured color number
-BANNER_FG="\033[38;5;${BANNER_COLOR}m"
-BANNER_BG="\033[48;5;${BANNER_COLOR}m"
-
 # --- Project banner ---
-PAD_LEN=20
-LEFT_PAD=$(printf "%${PAD_LEN}s" | tr ' ' '█')
-RIGHT_PAD=$(printf "%${PAD_LEN}s" | tr ' ' '█')
-printf "${BANNER_FG}${LEFT_PAD}${BANNER_BG}${WHITE}${BOLD} ${BANNER_TITLE} ${RESET}${BANNER_FG}${RIGHT_PAD}${RESET}\n"
+if [ "${BANNER_STYLE}" = "box" ]; then
+  # Box style: +---+ border with per-word title colors and cycling subtitle
+  BOX_ESC="\033[38;5;${BOX_COLOR}m"
+  IFS=' ' read -ra TITLE_WORDS <<< "$BANNER_TITLE"
+  IFS=' ' read -ra T_COLORS <<< "${TITLE_COLORS:-$BOX_COLOR}"
+  TITLE_OUT=""
+  for (( w=0; w<${#TITLE_WORDS[@]}; w++ )); do
+    ci=$(( w % ${#T_COLORS[@]} ))
+    TITLE_OUT="${TITLE_OUT}\033[38;5;${T_COLORS[$ci]}m${TITLE_WORDS[$w]} "
+  done
+  SUB_OUT=""
+  if [ -n "$BANNER_SUBTITLE" ]; then
+    IFS=' ' read -ra S_COLORS <<< "${SUBTITLE_COLORS:-$BOX_COLOR}"
+    sub_len=${#BANNER_SUBTITLE}
+    for (( i=0; i<sub_len; i+=2 )); do
+      chunk="${BANNER_SUBTITLE:$i:2}"
+      ci=$(( (i / 2) % ${#S_COLORS[@]} ))
+      SUB_OUT="${SUB_OUT}\033[38;5;${S_COLORS[$ci]}m${chunk}"
+    done
+  fi
+  content_len=$(( ${#BANNER_TITLE} + 4 ))
+  [ -n "$BANNER_SUBTITLE" ] && content_len=$(( content_len + ${#BANNER_SUBTITLE} + 5 ))
+  [ "$content_len" -lt 42 ] && content_len=42
+  BORDER=$(printf "%${content_len}s" | tr ' ' '-')
+  printf "${BOX_ESC}+${BORDER}+${RESET}\n"
+  if [ -n "$BANNER_SUBTITLE" ]; then
+    printf "${BOX_ESC}|${RESET}  ${TITLE_OUT}${RESET} ${DIM_WHITE}~${RESET}  ${SUB_OUT}${RESET}  ${BOX_ESC}|${RESET}\n"
+  else
+    printf "${BOX_ESC}|${RESET}  ${TITLE_OUT}${RESET} ${BOX_ESC}|${RESET}\n"
+  fi
+  printf "${BOX_ESC}+${BORDER}+${RESET}\n"
+elif [ "${BANNER_STYLE}" = "multicolor" ]; then
+  # Multi-color: each segment gets its own 256-color
+  IFS=' ' read -ra COLORS <<< "${BANNER_COLORS:-208 203 43 203 208}"
+  SEG_LEN="${BANNER_SEGMENT_LEN:-4}"
+  SEGMENT=$(printf "%${SEG_LEN}s" | tr ' ' '█')
+  LEFT_BAR=""
+  RIGHT_BAR=""
+  for c in "${COLORS[@]}"; do
+    LEFT_BAR="${LEFT_BAR}\033[38;5;${c}m${SEGMENT}"
+    RIGHT_BAR="${RIGHT_BAR}\033[38;5;${c}m${SEGMENT}"
+  done
+  TITLE_OUT=""
+  title_len=${#BANNER_TITLE}
+  num_colors=${#COLORS[@]}
+  for (( i=0; i<title_len; i++ )); do
+    char="${BANNER_TITLE:$i:1}"
+    ci=$(( i % num_colors ))
+    TITLE_OUT="${TITLE_OUT}\033[38;5;${COLORS[$ci]}m${char}"
+  done
+  printf "${LEFT_BAR}\033[0m ${TITLE_OUT}\033[0m ${RIGHT_BAR}\033[0m\n"
+else
+  # Solid: single color for bars, white title on colored background
+  BANNER_FG="\033[38;5;${BANNER_COLOR}m"
+  BANNER_BG="\033[48;5;${BANNER_COLOR}m"
+  PAD_LEN=20
+  LEFT_PAD=$(printf "%${PAD_LEN}s" | tr ' ' '█')
+  RIGHT_PAD=$(printf "%${PAD_LEN}s" | tr ' ' '█')
+  printf "${BANNER_FG}${LEFT_PAD}${BANNER_BG}${WHITE}${BOLD} ${BANNER_TITLE} ${RESET}${BANNER_FG}${RIGHT_PAD}${RESET}\n"
+fi
 
 # --- Daily usage tracking ---
 USAGE_DIR="$HOME/.claude/usage"
@@ -632,11 +696,12 @@ Full 256-color chart: https://www.ditig.com/256-colors-cheat-sheet
 ### Adding to a new project
 
 1. Copy both files into `<project>/.claude/`:
-   - `statusline-command.sh` (the self-contained script)
-   - `statusline.conf` (title + color config)
+   - `statusline-command.sh` (the self-contained script — supports all three banner styles)
+   - `statusline.conf` (title, style, and color config)
 2. `chmod +x <project>/.claude/statusline-command.sh`
-3. Edit `statusline.conf` to set a unique title and color
+3. Edit `statusline.conf` to set `BANNER_STYLE`, title, and colors
 4. No changes to `.claude/settings.json` needed — the global script auto-detects it
+5. Optionally add `"model": "opus[1m]"` to `<project>/.claude/settings.json` to lock the default model
 
 ### Important notes
 
@@ -644,6 +709,37 @@ Full 256-color chart: https://www.ditig.com/256-colors-cheat-sheet
 - The global script delegates via `exec`, which replaces itself entirely. Only one script ever produces output, so duplication is impossible.
 - No machine-specific paths in the project repo. Safe to commit and share with teammates.
 - Teammates without the global delegation script are unaffected — the project files are inert for them.
+- **Never put project-specific banners in the global `~/.claude/statusline-command.sh`** — they will show in ALL projects. Banners belong only in `<project>/.claude/statusline-command.sh`.
+
+### Per-project model override
+
+You can set a default model per project in `<project>/.claude/settings.json`. This overrides the global model and ensures the statusline always shows the correct model for that project:
+
+```json
+{
+  "model": "opus[1m]",
+  "statusLine": {
+    "type": "command",
+    "command": ".claude/statusline-command.sh"
+  }
+}
+```
+
+| Field | Purpose |
+|-------|---------|
+| `model` | Sets the default model for this project (e.g. `"opus[1m]"`, `"sonnet"`, `"haiku"`) |
+| `statusLine` | Optional direct override — bypasses the global delegation. Useful as a fallback if the global script doesn't have the delegation block. |
+
+> **Tip:** If your global script has the delegation block (Step 2), you don't need the `statusLine` entry in project settings — delegation handles it. But including it does no harm and provides a safety net.
+
+### Troubleshooting
+
+| Problem | Cause | Fix |
+|---------|-------|-----|
+| Project banner shows in ALL projects | Banner was added to the global `~/.claude/statusline-command.sh` | Move banner to `<project>/.claude/statusline-command.sh` only |
+| Duplicate output (banner + global stats) | Global script missing the `exec` delegation block | Add the delegation block from Step 2 to the global script |
+| Statusline shows wrong model after `/model` switch | Another terminal session (on a different model) is refreshing the statusline | Set `"model"` in project `.claude/settings.json` to lock the default |
+| Repo name shows twice | Global script renders a banner AND the `📁 folder` line | Remove any banner from the global script — banners belong in project scripts only |
 
 ### Advanced: Multi-Color Banner Bars
 
@@ -665,76 +761,16 @@ Multi-color:
 ```
 Each 4-block segment uses a different color from the palette, creating a gradient feel.
 
-#### Step 1: Update `statusline.conf`
-
-Add two new variables alongside the existing ones:
+#### statusline.conf for multi-color style
 
 ```bash
-# statusline.conf — per-project banner configuration
-# Sourced by .claude/statusline-command.sh at render time.
-# Changes take effect immediately; no restart needed.
-
-BANNER_TITLE="Design2Liquid"
-
-# BANNER_STYLE: "solid" (default) or "multicolor"
 BANNER_STYLE="multicolor"
-
-# BANNER_COLOR: used when BANNER_STYLE="solid" (single 256-color number)
-BANNER_COLOR=208
-
-# BANNER_COLORS: used when BANNER_STYLE="multicolor"
-# Space-separated list of 256-color numbers. Each number colors one 4-block
-# segment. The bars on each side mirror this sequence, so colors read
-# symmetrically: left edge → center → title → center → right edge.
-#
-# Tip: use 3-5 colors. Fewer feels bold, more feels busy.
-BANNER_COLORS="208 203 43 203 208"
-
-# BANNER_SEGMENT_LEN: blocks per color segment (default 4)
-# Increase for wider bars, decrease for tighter color transitions.
-BANNER_SEGMENT_LEN=4
+BANNER_TITLE="Design2Liquid"
+BANNER_COLORS="208 203 43 203 208"   # one color per 4-block segment
+BANNER_SEGMENT_LEN=4                  # blocks per color segment
 ```
 
-#### Step 2: Replace the banner rendering block
-
-In your project's `.claude/statusline-command.sh`, replace the banner section (the `# --- Project banner ---` block) with this version that handles both styles:
-
-```bash
-# --- Project banner ---
-if [ "${BANNER_STYLE:-solid}" = "multicolor" ]; then
-  # Multi-color: each segment gets its own 256-color
-  IFS=' ' read -ra COLORS <<< "${BANNER_COLORS:-208 203 43 203 208}"
-  SEG_LEN="${BANNER_SEGMENT_LEN:-4}"
-  SEGMENT=$(printf "%${SEG_LEN}s" | tr ' ' '█')
-
-  LEFT_BAR=""
-  RIGHT_BAR=""
-  for c in "${COLORS[@]}"; do
-    LEFT_BAR="${LEFT_BAR}\033[38;5;${c}m${SEGMENT}"
-    RIGHT_BAR="${RIGHT_BAR}\033[38;5;${c}m${SEGMENT}"
-  done
-
-  # Title text — cycle through the same colors per character
-  TITLE_OUT=""
-  title_len=${#BANNER_TITLE}
-  num_colors=${#COLORS[@]}
-  for (( i=0; i<title_len; i++ )); do
-    char="${BANNER_TITLE:$i:1}"
-    ci=$(( i % num_colors ))
-    TITLE_OUT="${TITLE_OUT}\033[38;5;${COLORS[$ci]}m${char}"
-  done
-
-  printf "${LEFT_BAR}\033[0m ${TITLE_OUT}\033[0m ${RIGHT_BAR}\033[0m\n"
-else
-  # Solid: single color for bars, white title on colored background
-  BANNER_FG="\033[38;5;${BANNER_COLOR}m"
-  BANNER_BG="\033[48;5;${BANNER_COLOR}m"
-  PAD_LEN=20
-  LEFT_PAD=$(printf "%${PAD_LEN}s" | tr ' ' '█')
-  RIGHT_PAD=$(printf "%${PAD_LEN}s" | tr ' ' '█')
-  printf "${BANNER_FG}${LEFT_PAD}${BANNER_BG}${WHITE}${BOLD} ${BANNER_TITLE} ${RESET}${BANNER_FG}${RIGHT_PAD}${RESET}\n"
-fi
-```
+> **Note:** The project script template (Step 2 above) already handles all three styles (`solid`, `multicolor`, `box`). Just set `BANNER_STYLE` in `statusline.conf` — no script edits needed.
 
 #### Example color schemes
 
@@ -755,3 +791,72 @@ fi
   ```bash
   TITLE_OUT="\033[1;97m${BANNER_TITLE}"
   ```
+
+### Advanced: Box Banner (conf-driven)
+
+A framed box with per-word title colors and cycling subtitle colors. Fully driven by `statusline.conf` — no script edits needed.
+
+#### What it looks like
+
+```
++------------------------------------------+
+|  Cuties Line Co.  ~  SnuggleSleeves      |
++------------------------------------------+
+```
+Each title word gets its own color, and the subtitle cycles through colors per 2 characters.
+
+#### statusline.conf for box style
+
+```bash
+BANNER_STYLE="box"
+
+BANNER_TITLE="Cuties Line Co."
+BANNER_SUBTITLE="SnuggleSleeves"
+
+BOX_COLOR=218              # soft pink — border color
+TITLE_COLORS="216 209 220" # peach, coral, gold — one per word
+SUBTITLE_COLORS="218 183 121"  # soft pink, lavender, mint — cycled per 2 chars
+```
+
+| Variable | Purpose |
+|----------|---------|
+| `BANNER_STYLE` | Must be `"box"` |
+| `BANNER_TITLE` | Main title text (words get colored individually) |
+| `BANNER_SUBTITLE` | Optional text after the `~` separator |
+| `BOX_COLOR` | 256-color number for `+` and `|` border characters |
+| `TITLE_COLORS` | Space-separated 256-color numbers, one per word |
+| `SUBTITLE_COLORS` | Space-separated 256-color numbers, cycled per 2 characters |
+
+#### Tips
+
+- `TITLE_COLORS` count should match word count in `BANNER_TITLE` (extras cycle, fewer repeat)
+- `SUBTITLE_COLORS` with 3 colors creates a gentle gradient feel
+- Omit `BANNER_SUBTITLE` for a title-only box
+- The `~` separator between title and subtitle uses dim white automatically
+
+### Banner Style Reference
+
+When setting up a project banner, choose one of these styles:
+
+| Style | Look | Best for |
+|-------|------|----------|
+| **Solid** | `████████ Title ████████` | Clean, simple, one accent color |
+| **Multi-color** | `████████ Title ████████` (gradient bars) | Colorful, eye-catching |
+| **Custom box** | `+--- Title ---+` (framed with per-word colors) | Brand identity, creative projects |
+| **Creative** | Agent designs something unique | When you want to be surprised |
+
+### Agent Guidance for Banner Setup
+
+When a user asks to set up a project banner, the statusline-setup agent should:
+
+1. **Ask which banner style they want** — offer these choices:
+   - **Solid (default)** — single accent color, clean `████` bars
+   - **Multi-color** — gradient `████` bars with multiple colors
+   - **Box** — framed `+---+` box with per-word coloring and optional subtitle
+   - **Creative** — let the agent design something unique and on-brand
+
+2. **All styles are conf-driven** — edit `statusline.conf` only, never modify `statusline-command.sh` for style changes (unless Creative requires truly custom rendering)
+3. **Copy the project script template** from the guide's Step 2 (Section 4) — it handles all three built-in styles
+4. **Always ensure** the global script has the `exec` delegation block (Step 2 above) so project banners don't leak into other projects
+5. **Never put project-specific banners in the global script** — they belong only in `<project>/.claude/statusline-command.sh`
+6. **Optionally set the model** — add `"model"` to project `.claude/settings.json` if the user wants a specific model for the project
