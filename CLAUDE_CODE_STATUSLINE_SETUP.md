@@ -15,14 +15,14 @@ Add the statusline command to your global settings:
 {
   "statusLine": {
     "type": "command",
-    "command": "~/.claude/statusline-command.sh"
+    "command": "~/.claude/statusline.sh"
   }
 }
 ```
 
-> **Note:** This is the global default. Per-project overrides happen via the delegation block in the global script (see Section 4), not by adding `statusLine` to project settings. The global script auto-detects project-level scripts and hands off to them.
+> **Note:** This is the global fallback. Every project MUST have its own local statusline — see Section 4. Per-project overrides use a `statusLine` entry in the project's `.claude/settings.json` pointing to a local `.claude/statusline.sh` script. The global script is only used when no project-level override exists.
 
-## 2. Create `~/.claude/statusline-command.sh`
+## 2. Create `~/.claude/statusline.sh`
 
 ```bash
 #!/bin/bash
@@ -40,12 +40,12 @@ dir=$(echo "$input" | jq -r '.workspace.current_dir // empty')
 cost=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
 
 # --- Project-level delegation (safe: project scripts are self-contained) ---
-# If the current project has its own .claude/statusline-command.sh, hand off
+# If the current project has its own .claude/statusline.sh, hand off
 # to it entirely via exec. No output has been produced yet, so there is no
 # risk of duplication. Team members without this global script simply get the
 # default status line; they are never affected by the project script.
-if [ -n "$dir" ] && [ -f "${dir}/.claude/statusline-command.sh" ]; then
-  exec bash "${dir}/.claude/statusline-command.sh" <<< "$input"
+if [ -n "$dir" ] && [ -f "${dir}/.claude/statusline.sh" ]; then
+  exec bash "${dir}/.claude/statusline.sh" <<< "$input"
 fi
 
 # Colors
@@ -68,6 +68,7 @@ RESET='\033[0m'
 USAGE_DIR="$HOME/.claude/usage"
 mkdir -p "$USAGE_DIR"
 TODAY=$(date +%Y-%m-%d)
+TODAY_UTC=$(date -u +%Y-%m-%d)
 DAILY_FILE="$USAGE_DIR/$TODAY.tsv"
 SESSION_ID=$(echo "$input" | jq -r '.session_id // empty')
 [ -z "$SESSION_ID" ] && SESSION_ID="$PPID"  # fallback
@@ -106,26 +107,23 @@ else
   jsonl_daily_tokens=0
   PROJECTS_DIR="$HOME/.claude/projects"
   if [ -d "$PROJECTS_DIR" ]; then
-    # Sum input+output tokens from JSONL log entries created today
+    # Sum tokens from JSONL log entries created today (reads .message.usage)
+    date_pattern="$TODAY"
+    [ "$TODAY" != "$TODAY_UTC" ] && date_pattern="$TODAY\|$TODAY_UTC"
     while IFS= read -r -d '' jsonl_file; do
       file_tokens=$(
-        grep -h '"type":"usage"' "$jsonl_file" 2>/dev/null \
-        | grep "\"$(date +%Y-%m-%d)" 2>/dev/null \
-        | jq -r '(.input_tokens // 0) + (.output_tokens // 0)' 2>/dev/null \
+        grep "$date_pattern" "$jsonl_file" 2>/dev/null \
+        | jq -r --arg d1 "$TODAY" --arg d2 "$TODAY_UTC" '
+          select(.message.usage and .timestamp and
+            ((.timestamp | startswith($d1)) or (.timestamp | startswith($d2)))) |
+          (.message.usage.input_tokens // 0) + (.message.usage.output_tokens // 0) +
+          (.message.usage.cache_creation_input_tokens // 0) +
+          (.message.usage.cache_read_input_tokens // 0)
+        ' 2>/dev/null \
         | awk '{s+=$1} END{print s+0}'
       )
-      jsonl_daily_tokens=$(( jsonl_daily_tokens + file_tokens ))
-    done < <(find "$PROJECTS_DIR" -name "*.jsonl" -newer "$USAGE_DIR/$TODAY.tsv" -print0 2>/dev/null || true)
-    # Fallback: scan all jsonl files if daily file doesn't exist yet
-    if [ "$jsonl_daily_tokens" -eq 0 ]; then
-      jsonl_daily_tokens=$(
-        find "$PROJECTS_DIR" -name "*.jsonl" -print0 2>/dev/null \
-        | xargs -0 grep -h '"type":"usage"' 2>/dev/null \
-        | grep "\"$(date +%Y-%m-%d)" 2>/dev/null \
-        | jq -r '(.input_tokens // 0) + (.output_tokens // 0)' 2>/dev/null \
-        | awk '{s+=$1} END{print s+0}'
-      )
-    fi
+      jsonl_daily_tokens=$(( jsonl_daily_tokens + ${file_tokens:-0} ))
+    done < <(find "$PROJECTS_DIR" -name "*.jsonl" -mtime -1 -print0 2>/dev/null || true)
   fi
   echo "$jsonl_daily_tokens" > "$JSONL_CACHE"
   echo "$NOW_EPOCH" > "$JSONL_CACHE_TIME"
@@ -224,7 +222,7 @@ printf "${CTX_COLOR}${BAR}${DIM_WHITE}${EMPTY_BAR}${RESET}\n"
 ## 3. Make it executable
 
 ```bash
-chmod +x ~/.claude/statusline-command.sh
+chmod +x ~/.claude/statusline.sh
 ```
 
 ## What it looks like
@@ -301,10 +299,10 @@ Cost and token totals are tracked across all Claude Code sessions per day.
 
 ### Token tracking (from JSONL files)
 - **Source**: Per-API-call `message.usage` blocks in `~/.claude/projects/*.jsonl`
-- **Token types counted**: `input_tokens` + `output_tokens`
+- **Token types counted**: `input_tokens` + `output_tokens` + `cache_creation_input_tokens` + `cache_read_input_tokens`
 - **Cache**: Results cached at `~/.claude/usage/jsonl-daily-tokens.cache`, refreshes every 30 seconds
-- **Scope**: Only scans JSONL files modified since the daily TSV file for performance
-- **Fallback**: If no recent files found, scans all JSONL files for today's date
+- **Scope**: Scans JSONL files modified in the last 24 hours (`-mtime -1`) for performance
+- **Date handling**: Matches both local and UTC dates to catch entries near midnight boundaries
 
 ### Why JSONL-based token tracking?
 
@@ -328,35 +326,57 @@ The current approach reads per-API-call tokens from Claude Code's JSONL log file
 - Human-readable token formatting (e.g. `93.3k`, `1.2M`)
 - 30-character progress bar with filled/empty block characters
 - Auto-cleanup of usage files older than 7 days
-- Per-project banner overrides via project-level `.claude/statusline-command.sh`
+- Per-project banner overrides via project-level `.claude/statusline.sh`
 
 ## 4. Per-Project Statusline Override
 
-Every project can have its own statusline with a custom banner, colors, and configuration. This is the recommended approach for distinguishing projects at a glance. The global script auto-delegates to project-level scripts — no manual wiring needed.
+Every project **MUST** have its own statusline with a custom banner, colors, and configuration. This is **required** for distinguishing projects at a glance when switching between them.
 
-### How it works
+### How it works (primary approach — local settings)
 
-The global `~/.claude/statusline-command.sh` (from step 2) includes a **project delegation block** near the top:
+Each project wires its own statusline by adding a `statusLine` entry to the project's `.claude/settings.json`:
+
+```json
+{
+  "statusLine": {
+    "type": "command",
+    "command": "bash .claude/statusline.sh"
+  }
+}
+```
+
+This overrides the global statusline **only for this project**. Other projects are unaffected. The project script (`.claude/statusline.sh`) is **self-contained** — it renders the banner and all standard info without calling back to the global script.
+
+**Key design decisions:**
+- Project-level `statusLine` in `.claude/settings.json` cleanly overrides the global setting — no delegation logic needed
+- The project script is fully self-contained — no circular calls back to the global script
+- No machine-specific paths in the project repo — safe to commit and share with teammates
+- Each project gets its own visual identity for instant recognition when switching contexts
+
+### Legacy fallback: global delegation
+
+The global `~/.claude/statusline.sh` also includes a **delegation block** as a fallback:
 
 ```bash
-if [ -n "$dir" ] && [ -f "${dir}/.claude/statusline-command.sh" ]; then
-  exec bash "${dir}/.claude/statusline-command.sh" <<< "$input"
+if [ -n "$dir" ] && [ -f "${dir}/.claude/statusline.sh" ]; then
+  exec bash "${dir}/.claude/statusline.sh" <<< "$input"
 fi
 ```
 
-This checks if the current project has its own `.claude/statusline-command.sh`. If found, it `exec`s into it — replacing the global script entirely. The project script is **self-contained** and renders everything (banner + all standard info) without calling back to the global script.
+This is a legacy mechanism — it checks if the current project has its own script and `exec`s into it. **Do not rely on this.** Always add the `statusLine` entry to project settings explicitly.
 
-**Key design decisions:**
-- Uses `exec` (not a subshell) so only one script ever produces output — no duplication possible
-- The project script is fully self-contained — no circular calls back to the global script
-- No changes needed to project-level `.claude/settings.json` — safe for shared repos where teammates may have different directory structures
-- Team members without the global delegation script are unaffected; the project files just sit there unused
-
-**Call chain:**
+**Call chain (primary — recommended):**
 ```
 Claude Code
-  → ~/.claude/statusline-command.sh   (global, reads JSON)
-      → checks for {cwd}/.claude/statusline-command.sh
+  → reads <project>/.claude/settings.json → finds statusLine
+      → runs <project>/.claude/statusline.sh directly
+```
+
+**Call chain (legacy fallback — not recommended):**
+```
+Claude Code
+  → ~/.claude/statusline.sh   (global, reads JSON)
+      → checks for {cwd}/.claude/statusline.sh
           [found]  exec → project script runs, global is gone
           [not found]  global script continues and renders normally
 ```
@@ -367,7 +387,7 @@ This is the only file you need to edit per project. It controls the banner title
 
 ```bash
 # statusline.conf — per-project banner configuration
-# Sourced by .claude/statusline-command.sh at render time.
+# Sourced by .claude/statusline.sh at render time.
 # Changes take effect immediately; no restart needed.
 #
 # BANNER_TITLE : text displayed in the centre of the banner strip
@@ -386,7 +406,7 @@ BANNER_TITLE="My Project"
 BANNER_COLOR=135   # purple
 ```
 
-### Step 2: Create `<project>/.claude/statusline-command.sh`
+### Step 2: Create `<project>/.claude/statusline.sh`
 
 This script is self-contained. It renders the project banner, then all the standard info (folder, branch, context, cost, tokens, progress bar). It does **not** call back to the global script.
 
@@ -513,6 +533,7 @@ fi
 USAGE_DIR="$HOME/.claude/usage"
 mkdir -p "$USAGE_DIR"
 TODAY=$(date +%Y-%m-%d)
+TODAY_UTC=$(date -u +%Y-%m-%d)
 DAILY_FILE="$USAGE_DIR/$TODAY.tsv"
 SESSION_ID=$(echo "$input" | jq -r '.session_id // empty')
 [ -z "$SESSION_ID" ] && SESSION_ID="$PPID"  # fallback
@@ -548,24 +569,23 @@ else
   jsonl_daily_tokens=0
   PROJECTS_DIR="$HOME/.claude/projects"
   if [ -d "$PROJECTS_DIR" ]; then
+    # Sum tokens from JSONL log entries created today (reads .message.usage)
+    date_pattern="$TODAY"
+    [ "$TODAY" != "$TODAY_UTC" ] && date_pattern="$TODAY\|$TODAY_UTC"
     while IFS= read -r -d '' jsonl_file; do
       file_tokens=$(
-        grep -h '"type":"usage"' "$jsonl_file" 2>/dev/null \
-        | grep "\"$(date +%Y-%m-%d)" 2>/dev/null \
-        | jq -r '(.input_tokens // 0) + (.output_tokens // 0)' 2>/dev/null \
+        grep "$date_pattern" "$jsonl_file" 2>/dev/null \
+        | jq -r --arg d1 "$TODAY" --arg d2 "$TODAY_UTC" '
+          select(.message.usage and .timestamp and
+            ((.timestamp | startswith($d1)) or (.timestamp | startswith($d2)))) |
+          (.message.usage.input_tokens // 0) + (.message.usage.output_tokens // 0) +
+          (.message.usage.cache_creation_input_tokens // 0) +
+          (.message.usage.cache_read_input_tokens // 0)
+        ' 2>/dev/null \
         | awk '{s+=$1} END{print s+0}'
       )
-      jsonl_daily_tokens=$(( jsonl_daily_tokens + file_tokens ))
-    done < <(find "$PROJECTS_DIR" -name "*.jsonl" -newer "$USAGE_DIR/$TODAY.tsv" -print0 2>/dev/null || true)
-    if [ "$jsonl_daily_tokens" -eq 0 ]; then
-      jsonl_daily_tokens=$(
-        find "$PROJECTS_DIR" -name "*.jsonl" -print0 2>/dev/null \
-        | xargs -0 grep -h '"type":"usage"' 2>/dev/null \
-        | grep "\"$(date +%Y-%m-%d)" 2>/dev/null \
-        | jq -r '(.input_tokens // 0) + (.output_tokens // 0)' 2>/dev/null \
-        | awk '{s+=$1} END{print s+0}'
-      )
-    fi
+      jsonl_daily_tokens=$(( jsonl_daily_tokens + ${file_tokens:-0} ))
+    done < <(find "$PROJECTS_DIR" -name "*.jsonl" -mtime -1 -print0 2>/dev/null || true)
   fi
   echo "$jsonl_daily_tokens" > "$JSONL_CACHE"
   echo "$NOW_EPOCH" > "$JSONL_CACHE_TIME"
@@ -652,7 +672,7 @@ printf "${CTX_COLOR}${BAR}${DIM_WHITE}${EMPTY_BAR}${RESET}\n"
 ### Step 3: Make it executable
 
 ```bash
-chmod +x <project>/.claude/statusline-command.sh
+chmod +x <project>/.claude/statusline.sh
 ```
 
 ### What it looks like
@@ -696,47 +716,54 @@ Full 256-color chart: https://www.ditig.com/256-colors-cheat-sheet
 ### Adding to a new project
 
 1. Copy both files into `<project>/.claude/`:
-   - `statusline-command.sh` (the self-contained script — supports all three banner styles)
+   - `statusline.sh` (the self-contained script — supports all three banner styles)
    - `statusline.conf` (title, style, and color config)
-2. `chmod +x <project>/.claude/statusline-command.sh`
+2. `chmod +x <project>/.claude/statusline.sh`
 3. Edit `statusline.conf` to set `BANNER_STYLE`, title, and colors
-4. No changes to `.claude/settings.json` needed — the global script auto-detects it
+4. **Add `statusLine` to `<project>/.claude/settings.json`** — this is required, not optional:
+   ```json
+   {
+     "statusLine": {
+       "type": "command",
+       "command": "bash .claude/statusline.sh"
+     }
+   }
+   ```
 5. Optionally add `"model": "opus[1m]"` to `<project>/.claude/settings.json` to lock the default model
 
 ### Important notes
 
-- The project `.claude/statusline-command.sh` is **self-contained** — it renders the banner AND all standard info. It does NOT call back to the global script.
-- The global script delegates via `exec`, which replaces itself entirely. Only one script ever produces output, so duplication is impossible.
+- **Every project MUST have a `statusLine` entry in its `.claude/settings.json`** — this is the primary mechanism for per-project statuslines. Do not rely on global delegation alone.
+- The project `.claude/statusline.sh` is **self-contained** — it renders the banner AND all standard info. It does NOT call back to the global script.
+- **Never touch the user's global files** (`~/.claude/settings.json`, `~/.claude/statusline.sh`). Only create and modify files inside the project's `.claude/` directory.
 - No machine-specific paths in the project repo. Safe to commit and share with teammates.
-- Teammates without the global delegation script are unaffected — the project files are inert for them.
-- **Never put project-specific banners in the global `~/.claude/statusline-command.sh`** — they will show in ALL projects. Banners belong only in `<project>/.claude/statusline-command.sh`.
+- Teammates without a project-level statusline are unaffected — they'll fall through to their global script or the default.
+- **Never put project-specific banners in the global `~/.claude/statusline.sh`** — they will show in ALL projects. Banners belong only in `<project>/.claude/statusline.sh`.
 
-### Per-project model override
+### Per-project settings
 
-You can set a default model per project in `<project>/.claude/settings.json`. This overrides the global model and ensures the statusline always shows the correct model for that project:
+Every project should have a `.claude/settings.json` with at minimum a `statusLine` entry. You can also set a default model:
 
 ```json
 {
-  "model": "opus[1m]",
   "statusLine": {
     "type": "command",
-    "command": ".claude/statusline-command.sh"
-  }
+    "command": "bash .claude/statusline.sh"
+  },
+  "model": "opus[1m]"
 }
 ```
 
 | Field | Purpose |
 |-------|---------|
-| `model` | Sets the default model for this project (e.g. `"opus[1m]"`, `"sonnet"`, `"haiku"`) |
-| `statusLine` | Optional direct override — bypasses the global delegation. Useful as a fallback if the global script doesn't have the delegation block. |
-
-> **Tip:** If your global script has the delegation block (Step 2), you don't need the `statusLine` entry in project settings — delegation handles it. But including it does no harm and provides a safety net.
+| `statusLine` | **Required.** Points to the project's local statusline script. This overrides the global statusline for this project only. |
+| `model` | Optional. Sets the default model for this project (e.g. `"opus[1m]"`, `"sonnet"`, `"haiku"`). |
 
 ### Troubleshooting
 
 | Problem | Cause | Fix |
 |---------|-------|-----|
-| Project banner shows in ALL projects | Banner was added to the global `~/.claude/statusline-command.sh` | Move banner to `<project>/.claude/statusline-command.sh` only |
+| Project banner shows in ALL projects | Banner was added to the global `~/.claude/statusline.sh` | Move banner to `<project>/.claude/statusline.sh` only |
 | Duplicate output (banner + global stats) | Global script missing the `exec` delegation block | Add the delegation block from Step 2 to the global script |
 | Statusline shows wrong model after `/model` switch | Another terminal session (on a different model) is refreshing the statusline | Set `"model"` in project `.claude/settings.json` to lock the default |
 | Repo name shows twice | Global script renders a banner AND the `📁 folder` line | Remove any banner from the global script — banners belong in project scripts only |
@@ -847,16 +874,84 @@ When setting up a project banner, choose one of these styles:
 
 ### Agent Guidance for Banner Setup
 
-When a user asks to set up a project banner, the statusline-setup agent should:
+> **MANDATORY: Always create the statusline locally.** When setting up a per-project statusline, you MUST:
+> 1. Create `.claude/statusline.sh` in the project directory
+> 2. Create `.claude/statusline.conf` in the project directory
+> 3. Add a `statusLine` entry to the project's `.claude/settings.json`
+>
+> NEVER modify the global `~/.claude/settings.json` or `~/.claude/statusline.sh`. These are the user's root-level files — do not read, edit, or overwrite them.
+> NEVER rely solely on global delegation — always wire the local script explicitly via project settings.
+> You are ONLY creating and modifying files inside the project's `.claude/` directory.
 
-1. **Ask which banner style they want** — offer these choices:
-   - **Solid (default)** — single accent color, clean `████` bars
-   - **Multi-color** — gradient `████` bars with multiple colors
-   - **Box** — framed `+---+` box with per-word coloring and optional subtitle
-   - **Creative** — let the agent design something unique and on-brand
+When a user asks to set up a project banner, walk them through this questionnaire:
 
-2. **All styles are conf-driven** — edit `statusline.conf` only, never modify `statusline-command.sh` for style changes (unless Creative requires truly custom rendering)
-3. **Copy the project script template** from the guide's Step 2 (Section 4) — it handles all three built-in styles
-4. **Always ensure** the global script has the `exec` delegation block (Step 2 above) so project banners don't leak into other projects
-5. **Never put project-specific banners in the global script** — they belong only in `<project>/.claude/statusline-command.sh`
-6. **Optionally set the model** — add `"model"` to project `.claude/settings.json` if the user wants a specific model for the project
+#### Step 1: Project Name
+
+Ask: **"What do you want to call your project in the banner?"**
+
+Suggest 2-3 examples based on the repo name or directory. For example, if the repo is `my-cool-app`:
+- "MyCoolApp"
+- "My Cool App"
+- "cool-app"
+
+#### Step 2: Banner Style
+
+Ask: **"Which banner style do you want?"** and show these options with examples:
+
+| Style | Example | Best for |
+|-------|---------|----------|
+| **Solid** | `████████████████████ Title ████████████████████` | Professional, serious projects — single accent color |
+| **Multi-color** | `████████████████████ Title ████████████████████` (gradient) | Playful, eye-catching — colors cycle through segments |
+| **Box** | `+--- Title  ~  Subtitle ---+` | Brand identity — per-word coloring, optional subtitle |
+| **Creative** | Agent designs something unique | When the user wants to be surprised |
+
+If the user picks **Box**, also ask for an optional subtitle.
+
+#### Step 3: Colors
+
+Ask: **"How do you want to pick your colors?"** and offer two options:
+
+**Option A — Pick from a reference chart.** Show this quick reference:
+
+| Color | Number | Color | Number |
+|-------|--------|-------|--------|
+| Red | 196 | Bright Red | 203 |
+| Orange | 208 | Yellow | 226 |
+| Green | 46 | Bright Green | 82 |
+| Blue | 27 | Bright Blue | 39 |
+| Cyan | 51 | Teal | 37 |
+| Purple | 135 | Violet | 141 |
+| Magenta | 201 | Pink | 213 |
+| Gold | 220 | White | 255 |
+
+Full chart: https://www.ditig.com/256-colors-cheat-sheet
+
+- **Solid**: pick 1 color for the bars and background.
+- **Multi-color**: pick 3-5 colors for the gradient segments (odd numbers work best for symmetry).
+- **Box**: pick a border color, then one color per title word, and optionally subtitle colors.
+
+**Option B — Provide a website URL.** The agent uses `WebFetch` to pull the page, then extracts brand colors from:
+- CSS custom properties (`--brand-*`, `--color-*`, `--primary`, etc.)
+- `<meta name="theme-color">` tags
+- Inline styles and prominent hex/rgb values in stylesheets
+
+The agent maps extracted hex colors to their nearest 256-color palette number, then:
+- **Solid**: uses the dominant/primary brand color
+- **Multi-color**: extracts 3-5 colors for the gradient segments
+- **Box**: extracts border + per-word title colors + optional subtitle colors
+- **Creative**: picks from the extracted palette at its discretion
+
+#### Step 4: Confirmation
+
+After generating all files, tell the user:
+
+> "Your statusline is set up! You can edit the title and colors anytime by opening `.claude/statusline.conf`."
+
+---
+
+#### Technical implementation steps (after questionnaire)
+
+1. **All styles are conf-driven** — edit `statusline.conf` only, never modify `statusline.sh` for style changes (unless Creative requires truly custom rendering)
+2. **Copy the project script template** from the guide's Step 2 (Section 4) — it handles all three built-in styles
+3. **Always add `statusLine` to the project's `.claude/settings.json`** — this is the primary mechanism, not global delegation
+4. **Never put project-specific banners in the global script** — they belong only in `<project>/.claude/statusline.sh`
