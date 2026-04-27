@@ -95,6 +95,7 @@ Cover these areas as relevant:
 - External integrations
 - Performance considerations
 - Security requirements
+- **Testing strategy** — every user story maps to at least one end-to-end test under the project's `e2e/` directory. The framework can be anything appropriate to the surface under test (HTTP API, CLI, UI). The purpose is regression protection: the `e2e/` suite is the safety net that catches a future contributor who breaks behavior they didn't realize the feature relied on. Discuss what "end-to-end" means for this feature and where `e2e/` lives.
 
 ### 2.4 Project Structure
 Propose where new code should live:
@@ -181,7 +182,7 @@ Here's the technical plan we've defined:
 | Framework | [e.g., Next.js with App Router] |
 | Primary Dependencies | [key new dependencies] |
 | Database | [storage approach] |
-| Testing | [testing strategy] |
+| Testing | [framework + `e2e/` location; one E2E test per user story is required] |
 | Target Platform | [deployment target] |
 | Performance Goals | [key metrics] |
 | Constraints | [important limitations] |
@@ -251,7 +252,7 @@ Write to `speckit-helpers/[BRANCH_NAME]/02-speckit-plan-[SHORT_NAME].md`:
 | **Primary Dependencies** | [list key dependencies, mark NEW vs existing] |
 | **Database** | [database choice and rationale] |
 | **Storage** | [file/blob storage if applicable] |
-| **Testing** | [testing framework and strategy] |
+| **Testing** | [framework + `e2e/` location; every user story has at least one E2E test for regression coverage] |
 | **Target Platform** | [deployment environment] |
 | **Deployment** | [hosting/deployment approach] |
 | **Performance Goals** | [key performance targets] |
@@ -282,6 +283,22 @@ Write to `speckit-helpers/[BRANCH_NAME]/02-speckit-plan-[SHORT_NAME].md`:
 ```text
 [proposed directory structure with annotations]
 ```
+
+---
+
+## Testing Strategy
+
+**E2E coverage is required.** Every user story (US1, US2, ...) maps to at least one end-to-end test under the project's `e2e/` directory. The suite is the project's regression net: when a future contributor forgets how a feature works, the `e2e/` tests catch what they break.
+
+| User Story | E2E Test File | What it Asserts |
+|------------|---------------|-----------------|
+| US1: [name] | `e2e/[file]` | [acceptance criteria covered] |
+| US2: [name] | `e2e/[file]` | [acceptance criteria covered] |
+| ...        | ...           | ... |
+
+**Framework**: [pick what's natural for the surface under test — HTTP, CLI, or UI]
+
+**When to add vs update**: New user stories add new test files. Modifying an existing major feature updates the existing E2E test for that feature so the assertions match the new behavior. Stale tests that protect old behavior are worse than no tests.
 
 ---
 

@@ -68,7 +68,11 @@ The tasks.md should be immediately executable - each task must be specific enoug
 
 **CRITICAL**: Tasks MUST be organized by user story to enable independent implementation and testing.
 
-**Tests are OPTIONAL**: Only generate test tasks if explicitly requested in the feature specification or if user requests TDD approach.
+**E2E tests are REQUIRED, not optional.** Every user story phase MUST include at least one end-to-end test task that lives under the project's `e2e/` directory. Framework is whatever fits the surface — HTTP, CLI, UI. The purpose is regression protection: the `e2e/` suite is what catches a future contributor who forgot how the feature works.
+
+**Other test types (unit, contract, integration) remain OPTIONAL**: generate them only if explicitly requested in the spec or if the user requests TDD. The hard requirement is the E2E task per user story.
+
+**Modifying an existing major feature**: instead of (or in addition to) adding a new E2E task, include a task to UPDATE the existing E2E test for that feature so its assertions match the new behavior. Stale tests that protect old behavior are worse than no tests.
 
 ### Checklist Format (REQUIRED)
 
@@ -132,6 +136,9 @@ Every task MUST strictly follow this format:
 - **Phase 1**: Setup (project initialization)
 - **Phase 2**: Foundational (blocking prerequisites - MUST complete before user stories)
 - **Phase 3+**: User Stories in priority order (P1, P2, P3...)
-  - Within each story: Tests (if requested) → Models → Services → Endpoints → Integration
-  - Each phase should be a complete, independently testable increment
+  - Within each story: Models → Services → Endpoints → Integration → **E2E test (REQUIRED)** in `e2e/`
+  - The E2E task asserts the user story's acceptance criteria end-to-end (HTTP, CLI, or UI as appropriate).
+  - Other test types (unit, contract, integration) only if requested.
+  - Each phase should be a complete, independently testable increment whose E2E test passes before moving on.
 - **Final Phase**: Polish & Cross-Cutting Concerns
+  - Run the full `e2e/` suite (existing tests + newly added ones) — must pass before delivery. This is the regression check.

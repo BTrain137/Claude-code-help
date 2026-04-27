@@ -99,14 +99,23 @@ The `$ARGUMENTS` can be either:
    - Use standard REST/GraphQL patterns
    - Output OpenAPI/GraphQL schema to `/contracts/`
 
-3. **Agent context update**:
+3. **Define testing strategy** → `plan.md` "Testing Strategy" section (REQUIRED):
+   - **E2E coverage is mandatory.** Every user story (US1, US2, ...) in `spec.md` must map to at least one end-to-end test under the project's `e2e/` directory.
+   - Framework is the team's choice — pick whatever fits the surface (HTTP, CLI, UI). The requirement is "tests an end user could run", not a specific tool.
+   - **Why mandatory**: the `e2e/` suite is the regression net. When a future contributor forgets how the feature works, these tests catch what they break.
+   - Produce the user-story → E2E test mapping table (story ID, test file path, what it asserts).
+   - **Modifications to existing major features** must update the existing E2E test for that feature, not just add a new one — stale assertions that protect old behavior are a hazard.
+
+4. **Generate quickstart.md** with the user-perspective walkthrough that the E2E tests will codify.
+
+5. **Agent context update**:
    - Run `.specify/scripts/bash/update-agent-context.sh claude`
    - These scripts detect which AI agent is in use
    - Update the appropriate agent-specific context file
    - Add only new technology from current plan
    - Preserve manual additions between markers
 
-**Output**: data-model.md, /contracts/*, quickstart.md, agent-specific file
+**Output**: data-model.md, /contracts/*, quickstart.md, plan.md (with Testing Strategy section), agent-specific file
 
 ## Key rules
 

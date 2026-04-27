@@ -115,6 +115,8 @@ You **MUST** consider the user input before proceeding (if not empty).
    - **Tests before code**: If you need to write tests for contracts, entities, and integration scenarios
    - **Core development**: Implement models, services, CLI commands, endpoints
    - **Integration work**: Database connections, middleware, logging, external services
+   - **E2E gate per user story**: A user story phase is NOT complete until its `e2e/` test (the one defined in plan.md's Testing Strategy) has been written AND passes against the running app. "All implementation tasks marked [X]" is not enough — the E2E must actually pass.
+   - **Update existing E2E when modifying a major feature**: if the change alters behavior an existing `e2e/` test asserts, update that test in the same phase. Do not leave stale assertions.
    - **Polish and validation**: Unit tests, performance optimization, documentation
 
 8. Progress tracking and error handling:
@@ -128,8 +130,10 @@ You **MUST** consider the user input before proceeding (if not empty).
 9. Completion validation:
    - Verify all required tasks are completed
    - Check that implemented features match the original specification
-   - Validate that tests pass and coverage meets requirements
+   - **Run the full `e2e/` suite** — every existing test plus every new test added by this feature. ALL must pass before declaring done. This is the regression gate: it's how the project notices when a future change forgets a requirement.
+     - If a previously-passing test now fails, the implementation regressed something. Fix the regression, do not delete or skip the test. The only legitimate reason to update an existing E2E assertion is a deliberate behavior change to a major feature, which must be explicit in spec.md.
+   - Validate that other tests (unit, contract, integration) pass and coverage meets requirements
    - Confirm the implementation follows the technical plan
-   - Report final status with summary of completed work
+   - Report final status with summary of completed work, including which E2E tests were added/updated and the full-suite pass result
 
 Note: This command assumes a complete task breakdown exists in tasks.md. If tasks are incomplete or missing, suggest running `/06-speckit.tasks` first to regenerate the task list.
