@@ -1,5 +1,5 @@
 ---
-description: Sync features.yaml with current branch state and regenerate CLAUDE.md Feature History table.
+description: Execute the implementation plan by processing and executing all tasks defined in tasks.md
 ---
 
 ## User Input
@@ -10,208 +10,161 @@ $ARGUMENTS
 
 You **MUST** consider the user input before proceeding (if not empty).
 
-## Purpose
+## Outline
 
-This skill synchronizes the `speckit-helpers/features.yaml` file with the current feature branch state and regenerates the auto-generated Feature History section in `CLAUDE.md`.
+1. Run `.specify/scripts/bash/check-prerequisites.sh --json --require-tasks --include-tasks` from repo root and parse FEATURE_DIR and AVAILABLE_DOCS list. All paths must be absolute. For single quotes in args like "I'm Groot", use escape syntax: e.g 'I'\''m Groot' (or double-quote if possible: "I'm Groot").
 
-## Arguments
+2. **Check checklists status** (if FEATURE_DIR/checklists/ exists):
+   - Scan all checklist files in the checklists/ directory
+   - For each checklist, count:
+     - Total items: All lines matching `- [ ]` or `- [X]` or `- [x]`
+     - Completed items: Lines matching `- [X]` or `- [x]`
+     - Incomplete items: Lines matching `- [ ]`
+   - Create a status table:
 
-- `--feature NNN` or `-f NNN`: Update a specific feature by ID (e.g., `--feature 008`)
-- `--status STATUS` or `-s STATUS`: Set the feature status (ideating|specified|planned|implementing|completed)
-- `--pr-number N`: Set the PR number after merge
-- `--pr-summary PATH`: Set the path to PR summary file
-- No arguments: Full sync - detect current branch, update key_files from diff, regenerate CLAUDE.md
+     ```text
+     | Checklist | Total | Completed | Incomplete | Status |
+     |-----------|-------|-----------|------------|--------|
+     | ux.md     | 12    | 12        | 0          | ✓ PASS |
+     | test.md   | 8     | 5         | 3          | ✗ FAIL |
+     | security.md | 6   | 6         | 0          | ✓ PASS |
+     ```
 
-## Execution Flow
+   - Calculate overall status:
+     - **PASS**: All checklists have 0 incomplete items
+     - **FAIL**: One or more checklists have incomplete items
 
-### Step 1: Determine Current Feature
+   - **If any checklist is incomplete**:
+     - Display the table with incomplete item counts
+     - **STOP** and ask: "Some checklists are incomplete. Do you want to proceed with implementation anyway? (yes/no)"
+     - Wait for user response before continuing
+     - If user says "no" or "wait" or "stop", halt execution
+     - If user says "yes" or "proceed" or "continue", proceed to step 3
 
-1. If `--feature` is provided, use that feature ID
-2. Otherwise, detect from current branch name:
-   ```bash
-   git branch --show-current
-   ```
-   - Extract feature ID from branch name pattern `NNN-feature-name` (e.g., `008-token-usage-tracking` → `008`)
-   - If on `main` or branch doesn't match pattern, prompt user for feature ID
+   - **If all checklists are complete**:
+     - Display the table showing all checklists passed
+     - Automatically proceed to step 3
 
-### Step 2: Read Current State
+3. Load and analyze the implementation context:
+   - **REQUIRED**: Read tasks.md for the complete task list and execution plan
+   - **REQUIRED**: Read plan.md for tech stack, architecture, and file structure
+   - **IF EXISTS**: Read data-model.md for entities and relationships
+   - **IF EXISTS**: Read contracts/ for API specifications and test requirements
+   - **IF EXISTS**: Read research.md for technical decisions and constraints
+   - **IF EXISTS**: Read quickstart.md for integration scenarios
 
-1. Read `speckit-helpers/features.yaml`
-2. Find the feature entry by ID
-3. If feature doesn't exist and we have a branch name, create a new entry with defaults
+4. **Project Setup Verification**:
+   - **REQUIRED**: Create/verify ignore files based on actual project setup:
 
-### Step 3: Auto-Detect Key Files from Git Diff
+   **Detection & Creation Logic**:
+   - Check if the following command succeeds to determine if the repository is a git repo (create/verify .gitignore if so):
 
-Run git diff to find changed files compared to main branch:
+     ```sh
+     git rev-parse --git-dir 2>/dev/null
+     ```
 
-```bash
-# Get list of changed files (added, modified, renamed)
-git diff --name-only main...HEAD --diff-filter=ACMR
-```
+   - Check if Dockerfile* exists or Docker in plan.md → create/verify .dockerignore
+   - Check if .eslintrc* exists → create/verify .eslintignore
+   - Check if eslint.config.* exists → ensure the config's `ignores` entries cover required patterns
+   - Check if .prettierrc* exists → create/verify .prettierignore
+   - Check if .npmrc or package.json exists → create/verify .npmignore (if publishing)
+   - Check if terraform files (*.tf) exist → create/verify .terraformignore
+   - Check if .helmignore needed (helm charts present) → create/verify .helmignore
 
-**Filter key files**:
-- Include: `src/**/*.ts`, `src/**/*.tsx`, `prisma/**/*.prisma`, `prisma/**/*.ts`
-- Exclude: `*.test.ts`, `*.spec.ts`, `tests/**`, `__tests__/**`, `*.d.ts`
-- Prioritize by importance:
-  1. Schema files (`prisma/schema.prisma`)
-  2. Route files (`src/app/**/route.ts`, `src/app/**/page.tsx`)
-  3. Service files (`src/server/services/**`)
-  4. Component files (`src/components/**`)
-  5. Utility files (`src/lib/**`)
+   **If ignore file already exists**: Verify it contains essential patterns, append missing critical patterns only
+   **If ignore file missing**: Create with full pattern set for detected technology
 
-**Limit to top 15 most important files** to keep the list manageable.
+   **Common Patterns by Technology** (from plan.md tech stack):
+   - **Node.js/JavaScript/TypeScript**: `node_modules/`, `dist/`, `build/`, `*.log`, `.env*`
+   - **Python**: `__pycache__/`, `*.pyc`, `.venv/`, `venv/`, `dist/`, `*.egg-info/`
+   - **Java**: `target/`, `*.class`, `*.jar`, `.gradle/`, `build/`
+   - **C#/.NET**: `bin/`, `obj/`, `*.user`, `*.suo`, `packages/`
+   - **Go**: `*.exe`, `*.test`, `vendor/`, `*.out`
+   - **Ruby**: `.bundle/`, `log/`, `tmp/`, `*.gem`, `vendor/bundle/`
+   - **PHP**: `vendor/`, `*.log`, `*.cache`, `*.env`
+   - **Rust**: `target/`, `debug/`, `release/`, `*.rs.bk`, `*.rlib`, `*.prof*`, `.idea/`, `*.log`, `.env*`
+   - **Kotlin**: `build/`, `out/`, `.gradle/`, `.idea/`, `*.class`, `*.jar`, `*.iml`, `*.log`, `.env*`
+   - **C++**: `build/`, `bin/`, `obj/`, `out/`, `*.o`, `*.so`, `*.a`, `*.exe`, `*.dll`, `.idea/`, `*.log`, `.env*`
+   - **C**: `build/`, `bin/`, `obj/`, `out/`, `*.o`, `*.a`, `*.so`, `*.exe`, `Makefile`, `config.log`, `.idea/`, `*.log`, `.env*`
+   - **Swift**: `.build/`, `DerivedData/`, `*.swiftpm/`, `Packages/`
+   - **R**: `.Rproj.user/`, `.Rhistory`, `.RData`, `.Ruserdata`, `*.Rproj`, `packrat/`, `renv/`
+   - **Universal**: `.DS_Store`, `Thumbs.db`, `*.tmp`, `*.swp`, `.vscode/`, `.idea/`
 
-### Step 4: Verify Diff Against PR Summary (if exists)
+   **Tool-Specific Patterns**:
+   - **Docker**: `node_modules/`, `.git/`, `Dockerfile*`, `.dockerignore`, `*.log*`, `.env*`, `coverage/`
+   - **ESLint**: `node_modules/`, `dist/`, `build/`, `coverage/`, `*.min.js`
+   - **Prettier**: `node_modules/`, `dist/`, `build/`, `coverage/`, `package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`
+   - **Terraform**: `.terraform/`, `*.tfstate*`, `*.tfvars`, `.terraform.lock.hcl`
+   - **Kubernetes/k8s**: `*.secret.yaml`, `secrets/`, `.kube/`, `kubeconfig*`, `*.key`, `*.crt`
 
-If a PR summary exists for this feature (`pull_request_summary/NNN-*.md`):
+5. Parse tasks.md structure and extract:
+   - **Task phases**: Setup, Tests, Core, Integration, Polish
+   - **Task dependencies**: Sequential vs parallel execution rules
+   - **Task details**: ID, description, file paths, parallel markers [P]
+   - **Execution flow**: Order and dependency requirements
 
-1. Read the PR summary
-2. Extract file paths mentioned in "Key Files", "Modified Files", or similar sections
-3. Compare with git diff results
-4. Report any discrepancies:
-   - Files in diff but not in PR summary (new changes since PR?)
-   - Files in PR summary but not in diff (removed changes?)
-5. Do NOT auto-fix - just report for user awareness
+6. Execute implementation following the task plan:
+   - **Phase-by-phase execution**: Complete each phase before moving to the next
+   - **Respect dependencies**: Run sequential tasks in order, parallel tasks [P] can run together  
+   - **Follow TDD approach**: Execute test tasks before their corresponding implementation tasks
+   - **File-based coordination**: Tasks affecting the same files must run sequentially
+   - **Validation checkpoints**: Verify each phase completion before proceeding
 
-### Step 5: Update features.yaml
+7. Implementation execution rules:
+   - **Setup first**: Initialize project structure, dependencies, configuration
+   - **Tests before code**: If you need to write tests for contracts, entities, and integration scenarios
+   - **Core development**: Implement models, services, CLI commands, endpoints
+   - **Integration work**: Database connections, middleware, logging, external services
+   - **Polish and validation**: Unit tests, performance optimization, documentation
 
-Update the feature entry with:
+8. Progress tracking and error handling:
+   - Report progress after each completed task
+   - Halt execution if any non-parallel task fails
+   - For parallel tasks [P], continue with successful tasks, report failed ones
+   - Provide clear error messages with context for debugging
+   - Suggest next steps if implementation cannot proceed
+   - **IMPORTANT** For completed tasks, make sure to mark the task off as [X] in the tasks file.
 
-```yaml
-- id: "NNN"
-  name: "Feature Name"  # From branch name or existing
-  status: STATUS  # From --status or existing
-  description: "..."  # From existing or spec.md if available
+9. Completion validation:
+   - Verify all required tasks are completed
+   - Check that implemented features match the original specification
+   - Validate that tests pass and coverage meets requirements
+   - Confirm the implementation follows the technical plan
+   - Report final status with summary of completed work
 
-  artifacts:
-    spec: "specs/NNN-name/spec.md"  # If exists
-    plan: "specs/NNN-name/plan.md"  # If exists
-    tasks: "specs/NNN-name/tasks.md"  # If exists
-    pr_summary: "pull_request_summary/NNN-*.md"  # If exists
-    pr_number: N  # From --pr-number or existing
+10. **User-perspective smoke test (REQUIRED before declaring done)**:
 
-  key_files:
-    - path/to/file1.ts  # From git diff (top 15)
-    - path/to/file2.ts
+    Type checks and unit tests verify code correctness, not feature correctness. A green build can still crash on first launch from a missing env var, an unbuilt asset, a wrong port, a typo in a startup script, or a path that exists in dev but not in the install. Catch these now — not after handoff.
 
-  patterns_used: []  # Keep existing, don't auto-detect
-  decisions: []  # Keep existing, don't auto-detect
+    **a. Reload the user story.** Re-read `spec.md` (and any `quickstart.md`) and extract the primary user journey(s). Write down the concrete steps a user would take, in order, including expected outcomes at each step. This is your test script. If multiple user stories exist, prioritize the golden path first, then exercise at least one edge case per story.
 
-  depends_on: []  # Keep existing
-  enables: []  # Keep existing
-```
+    **b. Determine how to launch.** Identify the run command from (in priority order): `plan.md` → `package.json` scripts / `pyproject.toml` entry points / `Makefile` / `README.md` / `quickstart.md`. Identify required env vars and verify they are set or documented. If the app needs a build step, run it first and confirm it succeeds.
 
-**Auto-detect artifacts**:
-```bash
-# Check if spec exists
-ls specs/NNN-*/spec.md 2>/dev/null
+    **c. Launch the app.**
+    - For long-running services (web servers, dev servers, MCP servers over SSE): start with `run_in_background: true`, then poll readiness (HTTP probe, log line, port open) before proceeding. Do NOT sleep blindly.
+    - For CLIs: invoke the actual command(s) the user would run.
+    - For stdio-based servers/agents: send a real request and read the real response.
+    - Capture stdout/stderr. If startup fails, **stop and fix the root cause** before continuing — do not paper over with try/except or skip the failing step.
 
-# Check if plan exists
-ls specs/NNN-*/plan.md 2>/dev/null
+    **d. Walk the user story as the user.** Execute every step from (a) against the running app. For each step, verify the actual behavior matches the expected outcome. For UI features, drive the browser (Playwright/Puppeteer/manual curl + screenshots, whatever is available). For APIs, hit the endpoints. For CLIs, run the commands with realistic inputs. Pay attention to:
+    - First-run experience (does it work on a fresh state?)
+    - Error messages (are they helpful when input is wrong?)
+    - Edge cases called out in spec.md (empty inputs, large inputs, missing optional fields)
+    - Regressions in adjacent features that the implementation could have touched
 
-# Check if tasks exists
-ls specs/NNN-*/tasks.md 2>/dev/null
+    **e. Triage and fix.** If any step fails, errors, or behaves differently than the user story specifies:
+    - Diagnose the root cause (do not just suppress the symptom)
+    - Apply the fix
+    - Re-run from step (c), not just the failing step — fixes can introduce new failures upstream
+    - Repeat until the full user story passes end-to-end
 
-# Check if PR summary exists
-ls pull_request_summary/NNN-*.md 2>/dev/null
-```
+    **f. Clean up.** Stop any background processes you started. Restore any test data you created (unless the user story requires it to persist).
 
-### Step 6: Regenerate CLAUDE.md Feature History
+    **g. Report honestly.** In the final summary, explicitly state:
+    - Which user stories you walked through and the outcome of each
+    - Any issues discovered during the smoke test and how they were resolved
+    - Anything you could NOT test in this environment (e.g., "could not exercise the OAuth flow without live credentials") — call these out as gaps, do not silently skip them
 
-1. Read `speckit-helpers/features.yaml`
-2. Generate the Feature History table:
+    **Do not claim the implementation is complete until step (d) passes end-to-end.** "All tasks marked [X]" and "tests pass" are necessary but not sufficient — the feature must actually work when a user runs it.
 
-```markdown
-## Feature History
-
-<!-- AUTO-GENERATED FROM speckit-helpers/features.yaml - Run /speckit.sync to update -->
-
-| # | Feature | Status | Description | Key Files |
-|---|---------|--------|-------------|-----------|
-| 001 | Feature Name | ✅ | Short description | `file1.ts`, `file2.ts` |
-| 002 | Feature Name | 🚧 | Short description | TBD |
-
-**Full details**: `speckit-helpers/features.yaml`
-
-<!-- END AUTO-GENERATED -->
-```
-
-**Status icons**:
-- `completed` → ✅
-- `implementing` → 🔧
-- `planned` → 📋
-- `specified` → 📝
-- `ideating` → 💡
-
-**Key Files display**:
-- Show first 2-3 key files abbreviated (just filename, no path)
-- If no key_files, show "TBD"
-
-3. Find and replace the section in CLAUDE.md between:
-   - Start: `## Feature History`
-   - End: `<!-- END AUTO-GENERATED -->`
-
-### Step 7: Validate and Report
-
-1. Validate YAML syntax of features.yaml
-2. Report summary:
-
-```markdown
-## Sync Complete
-
-**Feature**: 008 - Token Usage Tracking
-**Status**: planned
-
-### Key Files Updated (from git diff)
-- prisma/schema.prisma
-- src/server/services/token-service.ts
-- src/app/api/admin/tokens/route.ts
-- ... (N total)
-
-### Artifacts Detected
-- [x] spec.md
-- [x] plan.md
-- [ ] tasks.md
-- [ ] pr_summary
-
-### PR Summary Verification
-✅ No discrepancies found
-(or)
-⚠️ Discrepancies found:
-- `src/new-file.ts` in diff but not in PR summary
-- `src/old-file.ts` in PR summary but not in diff
-
-### CLAUDE.md Updated
-Feature History table regenerated with 8 features.
-```
-
-## Error Handling
-
-- **features.yaml doesn't exist**: Create it with template structure
-- **Feature ID not found and no branch**: Prompt user to specify `--feature`
-- **Invalid YAML after update**: Rollback and report error
-- **CLAUDE.md missing Feature History section**: Add it before `## Brand Style Guide` or at end
-
-## Examples
-
-```bash
-# Sync current branch (auto-detect feature from branch name)
-/12-speckit.sync
-
-# Sync specific feature
-/12-speckit.sync --feature 008
-
-# Update status after implementation complete
-/12-speckit.sync --feature 008 --status completed
-
-# Full update after PR merge
-/12-speckit.sync --feature 007 --status completed --pr-number 10 --pr-summary pull_request_summary/007-admin-dashboard.md
-```
-
-## Notes
-
-- This skill is designed to be run manually, not auto-triggered by other skills
-- Key files are auto-detected from git diff to ensure accuracy
-- PR summary verification is informational only - it reports but doesn't auto-fix
-- The skill preserves manually-added `patterns_used`, `decisions`, and dependency fields
-- Only `key_files`, `status`, and `artifacts` are auto-updated
+Note: This command assumes a complete task breakdown exists in tasks.md. If tasks are incomplete or missing, suggest running `/06-speckit.tasks` first to regenerate the task list.
