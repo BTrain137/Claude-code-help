@@ -39,6 +39,9 @@ model_name=$(echo "$input" | jq -r '.model.display_name // "Unknown"')
 dir=$(echo "$input" | jq -r '.workspace.current_dir // empty')
 cost=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
 
+# Effort level (read from settings.json — not in statusline input)
+effort_level=$(jq -r '.effortLevel // empty' "$HOME/.claude/settings.json" 2>/dev/null)
+
 # --- Project-level delegation (safe: project scripts are self-contained) ---
 # If the current project has its own .claude/statusline.sh, hand off
 # to it entirely via exec. No output has been produced yet, so there is no
@@ -54,6 +57,7 @@ YELLOW='\033[93m'
 BRIGHT_GREEN='\033[92m'
 BRIGHT_YELLOW='\033[93m'
 BRIGHT_RED='\033[91m'
+RED='\033[31m'
 GOLD='\033[38;5;220m'
 MAGENTA='\033[95m'
 BLUE='\033[94m'
@@ -170,7 +174,9 @@ fi
 if [ -z "$used_pct" ] || [ "$used_pct" = "null" ]; then
   daily_cost_fmt=$(printf '%.2f' "$daily_cost")
   formatted_daily=$(format_tokens $daily_tokens)
-  printf "${WHITE}[${BRIGHT_GREEN}0%% 0/200k${WHITE}]${RESET} ${GOLD}|${RESET} ${GOLD}\$%s${RESET} ${WHITE}|${RESET} ${WHITE}%s tokens${RESET} ${CORAL}|${RESET} ${CORAL}%s${RESET}\n" "$daily_cost_fmt" "$formatted_daily" "$model_name"
+  effort_suffix=""
+  [ -n "$effort_level" ] && effort_suffix=" ${RED}|${RESET} ${RED}${effort_level}${RESET}"
+  printf "${WHITE}[${BRIGHT_GREEN}0%% 0/200k${WHITE}]${RESET} ${GOLD}|${RESET} ${GOLD}\$%s${RESET} ${WHITE}|${RESET} ${WHITE}%s tokens${RESET} ${CORAL}|${RESET} ${CORAL}%s${RESET}%b\n" "$daily_cost_fmt" "$formatted_daily" "$model_name" "$effort_suffix"
   EMPTY_BAR=$(printf "%30s" | tr ' ' '░')
   printf "${DIM_WHITE}${EMPTY_BAR}${RESET}\n"
   exit 0
@@ -199,14 +205,17 @@ else
   CTX_COLOR="$BRIGHT_RED"
 fi
 
-# Line 2: [46% 93.3k/200k] | $32.10 | 850k tokens | Opus 4.6
-printf "${WHITE}[${CTX_COLOR}%.0f%% %s${WHITE}/${RESET}${BRIGHT_BLUE}%s${WHITE}]${RESET} ${GOLD}|${RESET} ${GOLD}\$%s${RESET} ${WHITE}|${RESET} ${WHITE}%s tokens${RESET} ${CORAL}|${RESET} ${CORAL}%s${RESET}\n" \
+# Line 2: [46% 93.3k/200k] | $32.10 | 850k tokens | Opus 4.6 | xhigh
+effort_suffix=""
+[ -n "$effort_level" ] && effort_suffix=" ${RED}|${RESET} ${RED}${effort_level}${RESET}"
+printf "${WHITE}[${CTX_COLOR}%.0f%% %s${WHITE}/${RESET}${BRIGHT_BLUE}%s${WHITE}]${RESET} ${GOLD}|${RESET} ${GOLD}\$%s${RESET} ${WHITE}|${RESET} ${WHITE}%s tokens${RESET} ${CORAL}|${RESET} ${CORAL}%s${RESET}%b\n" \
   "$used_pct" \
   "$formatted_context_used" \
   "$formatted_context" \
   "$daily_cost_fmt" \
   "$formatted_daily" \
-  "$model_name"
+  "$model_name" \
+  "$effort_suffix"
 
 # Line 3: progress bar
 BAR_WIDTH=30
@@ -230,30 +239,33 @@ chmod +x ~/.claude/statusline.sh
 ### On initial load (no messages yet)
 ```
 📁 my-project | 🌿 feat/my-branch
-[0% 0/200k] | $0.00 | 0 tokens | Opus 4.6
+[0% 0/200k] | $0.00 | 0 tokens | Opus 4.7 | xhigh
 ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░
 ```
 
 ### During a session (mid-day, multiple sessions)
 ```
 📁 my-project | 🌿 feat/my-branch
-[24% 48.2k/200k] | $32.10 | 850k tokens | Opus 4.6
+[24% 48.2k/200k] | $32.10 | 850k tokens | Opus 4.7 | xhigh
 ███████░░░░░░░░░░░░░░░░░░░░░░░
 ```
 
 ### High usage (67%+)
 ```
 📁 my-project | 🌿 feat/my-branch
-[78% 156k/200k] | $45.30 | 1.2M tokens | Opus 4.6
+[78% 156k/200k] | $45.30 | 1.2M tokens | Opus 4.7 | xhigh
 ███████████████████████░░░░░░░░
 ```
+
+> **Note:** The trailing `| xhigh` segment (red pipe + red effort label) is only rendered when `effortLevel` is set in `~/.claude/settings.json`. If the field is absent, the line ends at the model name as before.
 
 ## Line 2 Breakdown
 
 ```
-[76% 152k/200k] | $32.10 | 850k tokens | Opus 4.6
- ^^^  ^^^  ^^^    ^^^^^^   ^^^^^^^^^^    ^^^^^^^^
-  |    |    |       |          |            |
+[76% 152k/200k] | $32.10 | 850k tokens | Opus 4.7 | xhigh
+ ^^^  ^^^  ^^^    ^^^^^^   ^^^^^^^^^^    ^^^^^^^^   ^^^^^
+  |    |    |       |          |            |         |
+  |    |    |       |          |            |         └─ Effort level (from ~/.claude/settings.json, optional)
   |    |    |       |          |            └─ Model name
   |    |    |       |          └─ Daily total tokens (all sessions today)
   |    |    |       └─ Daily total cost (all sessions today)
@@ -274,6 +286,8 @@ chmod +x ~/.claude/statusline.sh
 | Daily cost `$X.XX`    | Gold                       | `\033[38;5;220m`                              |
 | Daily total tokens    | White                      | `\033[97m`                                    |
 | Model name            | Coral/Salmon               | `\033[38;5;209m`                              |
+| Effort pipe `\|`      | Red                        | `\033[31m`                                    |
+| Effort level          | Red                        | `\033[31m`                                    |
 | Directory             | Blue                       | `\033[94m`                                    |
 | Branch                | Bright Magenta             | `\033[95m`                                    |
 | Progress bar (filled) | Green/Yellow/Red (dynamic) | Same as context color                         |
@@ -327,6 +341,7 @@ The current approach reads per-API-call tokens from Claude Code's JSONL log file
 - 30-character progress bar with filled/empty block characters
 - Auto-cleanup of usage files older than 7 days
 - Per-project banner overrides via project-level `.claude/statusline.sh`
+- Optional effort-level indicator: reads `effortLevel` from `~/.claude/settings.json` and renders ` | <level>` in red after the model name (omitted when the field is unset)
 
 ## 4. Per-Project Statusline Override
 
