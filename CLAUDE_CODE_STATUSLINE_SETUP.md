@@ -2,10 +2,28 @@
 
 Quick reference for setting up Claude Code on a new machine.
 
+---
+
+## ⚠️ AGENT DIRECTIVE — READ FIRST
+
+**If you are an AI agent (Claude Code, subagent, etc.) acting on this guide, you MUST follow these rules. They override every other instruction in this document.**
+
+1. **NEVER touch the user's root/global files.** Do not read, edit, write, or `chmod` any file under `~/.claude/`. That includes `~/.claude/settings.json`, `~/.claude/statusline.sh`, `~/.claude/statusline-command.sh`, or any variant. Treat the entire `~/.claude/` directory as out of scope.
+2. **Only operate inside `<project>/.claude/`.** All work happens in the project's local `.claude/` directory — `<project>/.claude/settings.json`, `<project>/.claude/statusline.sh`, `<project>/.claude/statusline.conf`.
+3. **If the project has no local statusline, create one.** Check for `<project>/.claude/statusline.sh`. If it does not exist, create it (along with `statusline.conf` and the `statusLine` entry in `<project>/.claude/settings.json`) using the templates in Section 4. If it does exist, modify it in place.
+4. **Sections 1–3 of this guide are USER-only, one-time, manual setup.** They describe how a human bootstraps the global script on a fresh machine. Agents must skip them entirely. Do not run, copy, or reference Sections 1–3 as part of any agent task.
+5. **Your entry point is Section 4** ("Per-Project Statusline Override") and the "Agent Guidance for Banner Setup" subsection. Start there.
+
+If a user request would require modifying the global statusline (e.g. "add a timestamp to my statusline" without specifying scope), default to creating/modifying the project-local statusline and tell the user that's what you did. Ask for confirmation before ever proposing a change to `~/.claude/`.
+
+---
+
 ## Prerequisites
 
 - `jq` installed (`brew install jq` on macOS, `apt install jq` on Linux)
 - `bc` installed (usually pre-installed on macOS/Linux)
+
+> **Sections 1–3 below are for the human user setting up a new machine.** Agents: skip to [Section 4](#4-per-project-statusline-override).
 
 ## 1. Create `~/.claude/settings.json`
 
@@ -889,14 +907,25 @@ When setting up a project banner, choose one of these styles:
 
 ### Agent Guidance for Banner Setup
 
-> **MANDATORY: Always create the statusline locally.** When setting up a per-project statusline, you MUST:
-> 1. Create `.claude/statusline.sh` in the project directory
-> 2. Create `.claude/statusline.conf` in the project directory
-> 3. Add a `statusLine` entry to the project's `.claude/settings.json`
+> **MANDATORY: Always work locally. Never touch root.** When setting up or modifying a per-project statusline, you MUST follow this decision tree:
 >
-> NEVER modify the global `~/.claude/settings.json` or `~/.claude/statusline.sh`. These are the user's root-level files — do not read, edit, or overwrite them.
-> NEVER rely solely on global delegation — always wire the local script explicitly via project settings.
-> You are ONLY creating and modifying files inside the project's `.claude/` directory.
+> **Step 0 — Determine scope.** Every statusline task is project-local. Even if the user pastes this guide and asks you to "set up a statusline," default to project-local. Never modify `~/.claude/`.
+>
+> **Step 1 — Check for an existing local statusline.** Look for `<project>/.claude/statusline.sh`.
+> - **If it exists** → modify it in place (and `statusline.conf` if used). Do not recreate or overwrite the surrounding settings unless asked.
+> - **If it does NOT exist** → create all three files:
+>   1. `<project>/.claude/statusline.sh` (use the Section 4 / Step 2 template)
+>   2. `<project>/.claude/statusline.conf` (banner title, style, color)
+>   3. Add a `statusLine` entry to `<project>/.claude/settings.json` (create the file if missing)
+>   4. `chmod +x <project>/.claude/statusline.sh`
+>
+> **Step 2 — Verify scope before any write.** Before calling Write/Edit, the path must start with the project root. If your tool call would touch any path under `~/.claude/`, `$HOME/.claude/`, or `/Users/*/.claude/` (outside the project) — STOP and ask the user. Do not proceed.
+>
+> **Hard rules:**
+> - NEVER read, edit, write, chmod, or otherwise touch `~/.claude/settings.json`, `~/.claude/statusline.sh`, `~/.claude/statusline-command.sh`, or anything else under `~/.claude/`. These are the user's root-level files — out of scope.
+> - NEVER rely on global delegation alone. Always wire the local script explicitly via the project's `settings.json`.
+> - NEVER assume "the user already has a global script" means you can edit it. Even if they do, your job is to create/modify the local override.
+> - You are ONLY creating and modifying files inside the project's `.claude/` directory.
 
 When a user asks to set up a project banner, walk them through this questionnaire:
 
