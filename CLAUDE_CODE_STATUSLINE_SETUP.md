@@ -56,6 +56,8 @@ context_size=$(echo "$input" | jq -r '.context_window.context_window_size // 0')
 model_name=$(echo "$input" | jq -r '.model.display_name // "Unknown"')
 dir=$(echo "$input" | jq -r '.workspace.current_dir // empty')
 cost=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
+# .effort.level is absent for models that don't support reasoning effort
+effort_level=$(echo "$input" | jq -r '.effort.level // empty')
 
 # Effort level (read from settings.json — not in statusline input)
 effort_level=$(jq -r '.effortLevel // empty' "$HOME/.claude/settings.json" 2>/dev/null)
@@ -189,6 +191,20 @@ else
 fi
 
 # If no context data yet, show initial state and exit
+# --- Effort pip (heat-colored by level; empty if model has no effort) ---
+EFFORT_SEG=""
+if [ -n "$effort_level" ]; then
+  case "$effort_level" in
+    low)    ECOLOR="$BRIGHT_GREEN" ;;
+    medium) ECOLOR="$BRIGHT_YELLOW" ;;
+    high)   ECOLOR="$CORAL" ;;
+    xhigh)  ECOLOR="$BRIGHT_RED" ;;
+    max)    ECOLOR="$BRIGHT_MAGENTA" ;;
+    *)      ECOLOR="$WHITE" ;;
+  esac
+  EFFORT_SEG=" ${WHITE}|${RESET} ${ECOLOR}● ${effort_level}${RESET}"
+fi
+
 if [ -z "$used_pct" ] || [ "$used_pct" = "null" ]; then
   daily_cost_fmt=$(printf '%.2f' "$daily_cost")
   formatted_daily=$(format_tokens $daily_tokens)
@@ -319,6 +335,38 @@ chmod +x ~/.claude/statusline.sh
 | 34-66%  | Bright Yellow  | % + used tokens, progress bar |
 | 67-100% | Bright Red     | % + used tokens, progress bar |
 
+## Reasoning Effort Pip
+
+The status line shows the model's current reasoning effort as a colored pip (`●`)
+after the model name, read from `.effort.level` in the status line JSON. The pip is
+**heat-colored** so the level reads at a glance, mirroring the context-bar convention
+(calm green → hot red/magenta):
+
+| Level    | Color          | Code             |
+|----------|----------------|------------------|
+| `low`    | Bright Green   | `\033[92m`       |
+| `medium` | Bright Yellow  | `\033[93m`       |
+| `high`   | Coral          | `\033[38;5;209m` |
+| `xhigh`  | Bright Red     | `\033[91m`       |
+| `max`    | Bright Magenta | `\033[95m`       |
+
+Notes:
+- The `effort` object is **absent** from the JSON for models that don't support
+  reasoning effort (e.g. Haiku). In that case the pip — and its leading `|`
+  separator — is omitted entirely.
+- The level reflects the live session value, including mid-session `/effort`
+  changes. (Ultracode reports as `xhigh`.)
+- The mapping is hardcoded in the script's `EFFORT_SEG` block; edit the `case` to
+  recolor, or swap `●` for another glyph (`◆`, `▲`, …). To make it a single static
+  color instead of a heat scale, replace the `case` with one `ECOLOR=...`.
+
+Example — effort-supporting model vs. one without:
+
+```
+[42% 84k/200k] | $1.23 | 142k tokens | Opus 4.8 | ● high
+[42% 84k/200k] | $0.10 | 142k tokens | Haiku 4.5
+```
+
 ## Daily Usage Tracking
 
 Cost and token totals are tracked across all Claude Code sessions per day.
@@ -352,6 +400,7 @@ The current approach reads per-API-call tokens from Claude Code's JSONL log file
 - Shows directory + git branch on initial load (before any messages)
 - Displays zeroed-out stats with empty progress bar on first load
 - Dynamic color coding for context usage (green/yellow/red)
+- Reasoning effort shown as a heat-colored pip (●): green=low → magenta=max; hidden for models without effort
 - Context bracket shows actual window usage (not cumulative session tokens)
 - Daily cost totals across all sessions (from Claude's session data)
 - Daily token totals from JSONL per-API-call data (actual billed tokens, cached 30s)
@@ -485,6 +534,8 @@ context_size=$(echo "$input" | jq -r '.context_window.context_window_size // 0')
 model_name=$(echo "$input" | jq -r '.model.display_name // "Unknown"')
 dir=$(echo "$input" | jq -r '.workspace.current_dir // empty')
 cost=$(echo "$input" | jq -r '.cost.total_cost_usd // 0')
+# .effort.level is absent for models that don't support reasoning effort
+effort_level=$(echo "$input" | jq -r '.effort.level // empty')
 
 # Colors
 BRIGHT_GREEN='\033[92m'
@@ -660,10 +711,24 @@ else
 fi
 
 # --- Line 2 & 3: context / cost / tokens / model + progress bar ---
+# --- Effort pip (heat-colored by level; empty if model has no effort) ---
+EFFORT_SEG=""
+if [ -n "$effort_level" ]; then
+  case "$effort_level" in
+    low)    ECOLOR="$BRIGHT_GREEN" ;;
+    medium) ECOLOR="$BRIGHT_YELLOW" ;;
+    high)   ECOLOR="$CORAL" ;;
+    xhigh)  ECOLOR="$BRIGHT_RED" ;;
+    max)    ECOLOR="$BRIGHT_MAGENTA" ;;
+    *)      ECOLOR="$WHITE" ;;
+  esac
+  EFFORT_SEG=" ${WHITE}|${RESET} ${ECOLOR}● ${effort_level}${RESET}"
+fi
+
 if [ -z "$used_pct" ] || [ "$used_pct" = "null" ]; then
   daily_cost_fmt=$(printf '%.2f' "$daily_cost")
   formatted_daily=$(format_tokens $daily_tokens)
-  printf "${WHITE}[${BRIGHT_GREEN}0%% 0/200k${WHITE}]${RESET} ${GOLD}|${RESET} ${GOLD}\$%s${RESET} ${WHITE}|${RESET} ${WHITE}%s tokens${RESET} ${CORAL}|${RESET} ${CORAL}%s${RESET}\n" "$daily_cost_fmt" "$formatted_daily" "$model_name"
+  printf "${WHITE}[${BRIGHT_GREEN}0%% 0/200k${WHITE}]${RESET} ${GOLD}|${RESET} ${GOLD}\$%s${RESET} ${WHITE}|${RESET} ${WHITE}%s tokens${RESET} ${CORAL}|${RESET} ${CORAL}%s${RESET}${EFFORT_SEG}\n" "$daily_cost_fmt" "$formatted_daily" "$model_name"
   EMPTY_BAR=$(printf "%30s" | tr ' ' '░')
   printf "${DIM_WHITE}${EMPTY_BAR}${RESET}\n"
   exit 0
@@ -684,7 +749,7 @@ else
   CTX_COLOR="$BRIGHT_RED"
 fi
 
-printf "${WHITE}[${CTX_COLOR}%.0f%% %s${WHITE}/${RESET}${BRIGHT_BLUE}%s${WHITE}]${RESET} ${GOLD}|${RESET} ${GOLD}\$%s${RESET} ${WHITE}|${RESET} ${WHITE}%s tokens${RESET} ${CORAL}|${RESET} ${CORAL}%s${RESET}\n" \
+printf "${WHITE}[${CTX_COLOR}%.0f%% %s${WHITE}/${RESET}${BRIGHT_BLUE}%s${WHITE}]${RESET} ${GOLD}|${RESET} ${GOLD}\$%s${RESET} ${WHITE}|${RESET} ${WHITE}%s tokens${RESET} ${CORAL}|${RESET} ${CORAL}%s${RESET}${EFFORT_SEG}\n" \
   "$used_pct" \
   "$formatted_context_used" \
   "$formatted_context" \
@@ -714,14 +779,14 @@ With a project override:
 ```
 ████████████████████ My Project ████████████████████
 📁 my-project | 🌿 feat/my-branch
-[24% 48.2k/200k] | $32.10 | 850k tokens | Opus 4.6
+[24% 48.2k/200k] | $32.10 | 850k tokens | Opus 4.6 | ● high
 ███████░░░░░░░░░░░░░░░░░░░░░░░
 ```
 
 Without a project override (global only):
 ```
 📁 my-project | 🌿 feat/my-branch
-[24% 48.2k/200k] | $32.10 | 850k tokens | Opus 4.6
+[24% 48.2k/200k] | $32.10 | 850k tokens | Opus 4.6 | ● high
 ███████░░░░░░░░░░░░░░░░░░░░░░░
 ```
 
