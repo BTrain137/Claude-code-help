@@ -1,3 +1,7 @@
 .specstory/**
 
 .cursor/
+
+# macOS AppleDouble sidecars (this repo lives on a non-HFS volume)
+._*
+.DS_Store
