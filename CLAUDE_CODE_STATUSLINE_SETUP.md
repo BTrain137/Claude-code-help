@@ -101,18 +101,16 @@ SESSION_ID=$(echo "$input" | jq -r '.session_id // empty')
 session_tokens=$((total_input + total_output))
 if [ -f "$DAILY_FILE" ]; then
   # Remove existing line for this session, then append updated one
-  grep -v "^${SESSION_ID}	" "$DAILY_FILE" > "$DAILY_FILE.tmp" 2>/dev/null || true
-  mv "$DAILY_FILE.tmp" "$DAILY_FILE"
+  # Per-process tmp: a shared .tmp name lets concurrent sessions clobber each other
+  grep -v "^${SESSION_ID}	" "$DAILY_FILE" > "$DAILY_FILE.$$" 2>/dev/null || true
+  mv "$DAILY_FILE.$$" "$DAILY_FILE"
 fi
 printf "%s\t%s\t%s\n" "$SESSION_ID" "$session_tokens" "$cost" >> "$DAILY_FILE"
 
 # Sum all sessions for today
-daily_tokens=0
-daily_cost=0
-while IFS=$'\t' read -r _sid tokens sess_cost; do
-  daily_tokens=$((daily_tokens + ${tokens:-0}))
-  daily_cost=$(echo "$daily_cost + ${sess_cost:-0}" | bc)
-done < "$DAILY_FILE"
+# awk skips malformed lines; a corrupt line would otherwise break the bc sum and show $0.00
+daily_tokens=$(awk -F'\t' 'NF==3 {s+=$2} END {print s+0}' "$DAILY_FILE")
+daily_cost=$(awk -F'\t' 'NF==3 {s+=$3} END {print s+0}' "$DAILY_FILE")
 
 # --- JSONL-based token aggregation (accurate billing, cached 30s) ---
 JSONL_CACHE="$USAGE_DIR/jsonl-daily-tokens.cache"
@@ -375,7 +373,7 @@ Cost and token totals are tracked across all Claude Code sessions per day.
 - **Storage**: `~/.claude/usage/YYYY-MM-DD.tsv` (one file per day)
 - **Format**: Each line is `SESSION_ID<tab>TOKENS<tab>COST`
 - **Source**: `cost.total_cost_usd` from Claude Code's live session data (authoritative)
-- **Updates**: Each statusline refresh updates the current session's cost, then sums all sessions
+- **Updates**: Each statusline refresh updates the current session's cost, then sums all sessions (malformed lines are skipped)
 
 ### Token tracking (from JSONL files)
 - **Source**: Per-API-call `message.usage` blocks in `~/.claude/projects/*.jsonl`
@@ -624,17 +622,15 @@ SESSION_ID=$(echo "$input" | jq -r '.session_id // empty')
 
 session_tokens=$((total_input + total_output))
 if [ -f "$DAILY_FILE" ]; then
-  grep -v "^${SESSION_ID}	" "$DAILY_FILE" > "$DAILY_FILE.tmp" 2>/dev/null || true
-  mv "$DAILY_FILE.tmp" "$DAILY_FILE"
+  # Per-process tmp: a shared .tmp name lets concurrent sessions clobber each other
+  grep -v "^${SESSION_ID}	" "$DAILY_FILE" > "$DAILY_FILE.$$" 2>/dev/null || true
+  mv "$DAILY_FILE.$$" "$DAILY_FILE"
 fi
 printf "%s\t%s\t%s\n" "$SESSION_ID" "$session_tokens" "$cost" >> "$DAILY_FILE"
 
-daily_tokens=0
-daily_cost=0
-while IFS=$'\t' read -r _sid tokens sess_cost; do
-  daily_tokens=$((daily_tokens + ${tokens:-0}))
-  daily_cost=$(echo "$daily_cost + ${sess_cost:-0}" | bc)
-done < "$DAILY_FILE"
+# awk skips malformed lines; a corrupt line would otherwise break the bc sum and show $0.00
+daily_tokens=$(awk -F'\t' 'NF==3 {s+=$2} END {print s+0}' "$DAILY_FILE")
+daily_cost=$(awk -F'\t' 'NF==3 {s+=$3} END {print s+0}' "$DAILY_FILE")
 
 # --- JSONL-based token aggregation (accurate billing, cached 30s) ---
 JSONL_CACHE="$USAGE_DIR/jsonl-daily-tokens.cache"
